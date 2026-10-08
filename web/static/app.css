@@ -1,0 +1,234 @@
+/* 青瓷（Celadon）：近白青底 + 深青勾边 + 一处强调（2026-10-08 用户定；色板见 青瓷配色规范.md） */
+:root{--primary:#1D4ED8;--secondary:#3B82F6;--accent:#B45309;--bg:#EDF1F6;--fg:#0F172A;
+      --muted:#E6EDF5;--border:#DCE5EF;--danger:#DC2626;--dim:#64748B;--ok:#0F766E;
+      --soft:#F7F9FC;--teal:#0F766E;--teal-50:#F5FCFA;--teal-100:#E5F5F0;--teal-200:#CBE9E1;
+      --line-200:#E7EDF5;--ink-400:#94A3B8}
+*{box-sizing:border-box}
+body{margin:0;padding:24px 0 44px;background:var(--bg);color:var(--fg);
+     font:13.5px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+.num{font-family:"Cascadia Mono",Consolas,ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+.head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+h1{font-size:18.5px;margin:0}
+/* 多活动切换器（2026-09-28）：下拉本身就是页头标题，同一个名字不写两遍 */
+.actsel{font:inherit;font-size:18.5px;font-weight:600;color:var(--fg);background:transparent;
+        border:1px solid transparent;border-radius:8px;padding:3px 8px;cursor:pointer;max-width:460px}
+.actsel:hover{border-color:var(--border);background:#fff}
+.tag{font-size:11.5px;padding:2px 8px;border-radius:6px;background:#fff;
+     border:1px solid var(--border);color:var(--dim)}
+.sub{color:var(--dim);font-size:12px;margin:6px 0 0}
+section{margin-top:22px}
+.cardhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+h2{font-size:13.5px;font-weight:600;letter-spacing:.02em;color:var(--fg);
+   display:flex;align-items:center;gap:8px;margin:0}
+h2::before{content:"";width:3px;height:13px;background:var(--primary);border-radius:1px}
+.hint{color:var(--dim);font-size:12px}
+.fbtn[disabled]{opacity:.5;cursor:default;border-color:var(--border);color:var(--dim)}
+/* 成组控件做成一段 segmented（桶级/资源级、A~E 桶）——2026-10-08 起 */
+.ctl{margin-left:auto;display:flex;align-items:center;gap:4px;flex-wrap:wrap;
+     background:#E4EAF2;border-radius:9px;padding:3px}
+.ctl .fbtn{border:0;background:transparent;border-radius:7px;padding:3px 11px;color:#5A6B80}
+.ctl .fbtn:hover{background:#fff;color:var(--fg)}
+.ctl .fbtn.on{background:#fff;color:var(--primary);box-shadow:0 1px 2px rgba(15,23,42,.1)}
+.fbtn{font:inherit;font-size:12.5px;padding:4px 11px;border-radius:8px;border:1px solid var(--border);
+      background:#fff;color:#475569;cursor:pointer;transition:all .18s}
+.fbtn:hover{border-color:#B9C7DA;color:var(--fg)}
+.fbtn.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.iconbtn{padding:4px 8px;display:inline-flex;align-items:center}
+.iconbtn svg{display:block}
+.iconbtn.spin svg{animation:spin .9s linear infinite}   /* 取数/刷新进行中：箭头一直转 */
+.iconbtn.spin{border-color:var(--primary);color:var(--primary)}
+/* 待复盘入口（2026-09-30）：到门槛还没复盘的工单，**没有就把整个按钮藏掉**。
+   2026-10-08 改配色（用户："默认黄色让我感觉需要复盘"）：按钮本体保持中性，
+   **只有数字是琥珀胶囊**——有它才知道有事，不用整块发黄 */
+.todobtn{position:relative;overflow:visible;border-color:var(--border);color:var(--dim)}
+.todobtn:hover{border-color:var(--accent);color:var(--accent);background:#FFFDF8}
+/* 数字做成**右上角小角标**（2026-10-08 用户定：别挤在图标旁边，控制好大小） */
+.todocount{position:absolute;top:-7px;right:-7px;min-width:16px;height:16px;padding:0 4px;
+           box-sizing:border-box;border-radius:999px;background:var(--accent);color:#fff;
+           font-family:"Cascadia Mono",Consolas,ui-monospace,monospace;font-size:10.5px;font-weight:700;
+           line-height:16px;text-align:center;box-shadow:0 0 0 2px var(--bg)}
+.todocount:empty{display:none}
+/* 点一行要跳走，所以鼠标放上去必须有反馈（2026-09-30 用户：原来"移到行上没反馈"）：
+   底色渐入 + 左侧暖色竖条滑进来 + 判定彩标微微放大，都不改布局（只动颜色和 transform） */
+.todotb tr.gorow{cursor:pointer}
+.todotb tr.gorow td{transition:background .18s ease, box-shadow .18s ease}
+.todotb tr.gorow:hover td{background:#FFF7E8}
+.todotb tr.gorow:hover td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.todotb .badge{display:inline-block;transition:transform .18s ease}
+.todotb tr.gorow:hover .badge{transform:scale(1.06)}
+.todotb tr.gorow:active td{background:#FCEDD6}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+#fetchstate.ok{color:#0F766E;font-weight:600}          /* 完毕：绿色 */
+#fetchstate.warn{color:var(--accent);font-weight:600}
+.calwrap{position:relative;display:flex;align-items:center;gap:8px}
+.cal{position:absolute;top:calc(100% + 8px);left:0;z-index:20;width:268px;background:#fff;
+     border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(15,23,42,.14);padding:12px}
+.calhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.calhead b{font-size:13px;font-weight:600}
+.calnav{display:flex;gap:6px}
+.calnav button{width:26px;height:26px;border-radius:8px;border:1px solid var(--border);background:#fff;
+               color:var(--primary);cursor:pointer;font:inherit;line-height:1}
+.calnav button:disabled{opacity:.35;cursor:default;color:var(--dim)}
+.calwd,.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
+.calwd span{color:var(--dim);font-size:11.5px;padding:2px 0}
+.calgrid button{border:0;background:transparent;border-radius:8px;height:30px;font:inherit;font-size:12.5px;
+                color:var(--fg);cursor:pointer}
+.calgrid button:hover:not(:disabled){background:var(--muted)}
+.calgrid button.sel{background:#E7F0FE;color:var(--primary)}
+.calgrid button.end{background:var(--primary);color:#fff;font-weight:600}
+.calgrid button:disabled{color:#C9CED8;cursor:default}
+.calhint{color:var(--dim);font-size:11.5px;margin-top:8px;text-align:center}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.charthead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.charthead b{font-size:12.5px}
+.charthead .seg{margin-left:auto}
+.seg{display:inline-flex;background:var(--muted);border-radius:999px;padding:3px}
+.seg button{font:inherit;font-size:12px;padding:3px 12px;border:0;border-radius:999px;background:transparent;
+            color:var(--dim);cursor:pointer;transition:.18s}
+.seg button:hover{color:var(--primary)}
+.seg button.on{background:#fff;color:var(--primary);box-shadow:0 1px 3px rgba(15,23,42,.12)}
+@media (max-width:900px){.charts{grid-template-columns:1fr}}
+.chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;padding:4px 12px;
+      border-radius:999px;border:1px solid var(--border);background:#fff;color:var(--dim);cursor:pointer;transition:all .18s}
+.chip i{width:9px;height:9px;border-radius:50%;background:#CBD5E1}
+.chip:hover{border-color:var(--secondary)}
+.chip.on{color:#fff;border-color:transparent}
+.chip.on i{background:#fff}
+.panel{background:#fff;border:0;border-radius:12px;padding:4px 6px;
+       box-shadow:0 1px 2px rgba(15,23,42,.05),0 0 0 1px rgba(15,23,42,.06)}
+/* 批次切换（2026-09-28）：分桶统计左上角那个下拉 */
+.sel{font:inherit;font-size:12.5px;padding:3px 8px;border-radius:8px;border:1px solid var(--border);
+     background:#fff;color:var(--fg);cursor:pointer;max-width:260px}
+.sel:hover{border-color:var(--secondary)}
+tr.mainrow{cursor:pointer}
+tr.mainrow:hover td{background:#F7FAFF}
+/* 批次之间：批次行 / 展开出来的资源行（2026-09-28：批次行左侧用桶色竖条，跟资源行区分开） */
+tr.brow td{background:#FCFDFF;font-weight:600}
+tr.brow.cur td{background:#F4F8FF}
+tr.brow:hover td{background:#F1F6FF}
+tr.crow td{background:#fff;padding-left:8px}
+.slotdot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px;vertical-align:1px}
+tr.crow.click{cursor:pointer}
+tr.crow.click:hover td{background:#F1F6FF}
+table{border-collapse:collapse;width:100%}
+/* 列宽钉死：切时间段/口径时数字位数变化不再挤动表头（用户 2026-09-20 反馈的抖动） */
+#buckets > table,.resblock > table,.subtable{table-layout:fixed}
+.resblock table{margin-top:2px}
+th,td{padding:12px;border-bottom:1px solid #F1F5F9;font-size:13.5px;text-align:left}
+th{color:var(--ink-400);font-weight:600;font-size:11px;letter-spacing:.07em;background:transparent;
+   padding:11px 12px 9px;border-bottom:1px solid var(--muted)}
+/* 数据先行：桶名与关键数字加重，标签继续往后退 */
+#buckets tbody td:first-child{font-weight:600}
+#buckets tbody td.n{font-size:14.5px;font-weight:600;letter-spacing:.01em}
+#buckets tbody td.c .num{font-size:14px;font-weight:600}
+#batchstats tbody td.n{font-weight:600}
+td.n,th.n{text-align:right}
+td.c,th.c{text-align:center}
+/* 展开出来的资源行（2026-09-28）：跟主表同列、浅底 + 缩进，跟桶行区分开 */
+tr.crow td{background:#FAFBFD}
+tr.crow td:first-child{padding-left:24px}
+.ct{font-size:13px;color:var(--fg)}
+tr:last-child td{border-bottom:none}
+.barwrap{display:inline-block;width:110px;height:6px;background:#E9EFF6;border-radius:3px;
+         overflow:hidden;vertical-align:middle}
+.bar{display:block;height:6px;border-radius:3px}
+.mkdot{width:18px;height:18px;border-radius:50%;font-size:10.5px;color:#fff;font-weight:600;
+       box-shadow:0 1px 2px rgba(15,23,42,.12);
+       display:inline-flex;align-items:center;justify-content:center}
+.subrow td{background:#FCFDFF;padding:0 10px 8px}
+.subtable th,.subtable td{font-size:12px;padding:4px 8px}
+.resblock{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+.resblock h3{margin:0 0 8px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px}
+.badge{font-size:11.5px;padding:2px 8px;border-radius:6px;margin-left:6px;white-space:nowrap;font-weight:500}
+.badge.hi{background:#E8F0FE;color:#1D4ED8}
+.badge.warn{background:#FDF1E3;color:var(--accent)}
+.badge.zero{background:#F6E9E9;color:#B91C1C}
+.badge.end{background:#EEF1F6;color:var(--dim)}
+.badge.ok{background:#E5F5F0;color:var(--ok)}
+.badge.dim{background:#EEF2F7;color:var(--dim)}
+/* 「保留」类统一走青（2026-10-08 用户定）；「点击最高」是另一层信息，用浅绿 */
+.badge.keepflag{background:#E5F5F0;color:#0F766E}
+.badge.best{background:#ECFDF5;color:#047857}
+/* 建议动作里的「留 / 下」跟弹窗一个色系 */
+.actkeep{color:#0F766E;font-weight:600}
+.actdrop{color:#B91C1C}
+/* 飘红：直接把词标在文案里（2026-09-28 用户定，不再单起一行） */
+.hl{color:#B91C1C;font-weight:600}
+.ok{color:var(--ok)}.warn{color:var(--accent)}.dim{color:var(--dim)}.danger{color:var(--danger)}
+input[type=date]{cursor:pointer;caret-color:transparent}
+input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer;opacity:.55}
+
+/* 「调整思路」小图标 + 弹窗（2026-09-30 用户定：动作里只留"留谁 / 下谁"，思路收进图标里） */
+.idea{margin-left:7px;width:20px;height:20px;padding:0;border-radius:50%;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;vertical-align:-4px;
+  border:1px solid var(--border);background:#F1F6FF;color:var(--primary);
+  transition:background .15s ease,transform .15s ease,box-shadow .15s ease}
+.idea:hover{background:#E0ECFF;transform:translateY(-1px);box-shadow:0 2px 6px rgba(30,64,175,.18)}
+.idea:active{transform:translateY(0)}
+.modal{position:fixed;inset:0;z-index:50;background:rgba(15,23,42,.38);
+  display:flex;align-items:center;justify-content:center;padding:24px}
+.modal[hidden]{display:none}
+.modalbox{position:relative;width:100%;max-width:540px;background:#fff;border-radius:14px;
+  padding:22px 24px 20px;box-shadow:0 24px 64px rgba(15,23,42,.26)}
+.modalbox h3{margin:0 0 16px;padding-right:28px;font-size:16px;font-weight:600;color:var(--fg)}
+.modalbox.wide{max-width:900px}          /* 待复盘清单：列多，弹窗得宽一点 */
+/* ---- 三条文案对比大弹窗（2026-10-08 用户定）：未到门槛「记分卡」/ 过门槛「胜出特写」 ---- */
+.modalbox.cmp{max-width:1040px;max-height:88vh;overflow:auto}
+.modalbox.cmp h3{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 12px;
+                 padding-right:34px;font-size:16.5px}
+.modalbox.cmp h3 .mkdot{width:20px;height:20px;font-size:11px;flex:0 0 auto}
+.cmpchip{font-size:11.5px;font-weight:500;color:var(--dim);background:#F1F5F9;border-radius:999px;padding:2px 9px}
+.cmpstyles{display:inline-flex;gap:2px;margin-left:auto;background:#EEF3F9;border-radius:8px;padding:2px}
+.cmpstyles button{border:0;background:transparent;border-radius:6px;padding:2px 9px;font:inherit;
+  font-size:12px;color:#5A6B80;cursor:pointer;transition:background .15s ease,color .15s ease}
+.cmpstyles button:hover{color:var(--fg)}
+.cmpstyles button.on{background:#fff;color:var(--primary);box-shadow:0 1px 2px rgba(15,23,42,.1)}
+.cmpmeta{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--dim)}
+.cmpprog{display:flex;align-items:center;gap:8px;flex:1 1 260px;min-width:200px}
+.cmpprog b{font-size:14px;color:var(--fg)}
+.cmpprog .barwrap{flex:1 1 auto;width:auto}
+.cmpadv{color:var(--fg);font-size:12.5px}
+.cmprule{height:1px;background:var(--muted);margin:14px 0}
+.cmpslot{display:flex;align-items:center;gap:7px;font-size:13px}
+.cmpslot b{font-weight:600}
+/* ① 记分卡：标题/摘要在前，指标在后（用户 2026-10-08 定） */
+.scoretab{width:100%;border-collapse:collapse;table-layout:fixed}
+.scoretab th,.scoretab td{padding:10px 14px;text-align:left;vertical-align:top}
+.scoretab .rh{width:86px;color:var(--ink-400);font-size:11px;font-weight:600;letter-spacing:.07em;
+              background:#FAFCFE;border-right:1px solid #EEF2F7}
+.scoretab thead th{font-size:13px;font-weight:600;padding:6px 14px 10px;border-bottom:1px solid #E2E8F0}
+.scoretab tbody th,.scoretab tbody td{border-bottom:1px solid #F1F5F9}
+.scoretab tbody td{font-size:15px;font-weight:600}
+.scoretab tbody td.num{font-family:"Cascadia Mono",Consolas,ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.scoretab thead th.win{background:#F2FBF8;color:var(--teal);border-radius:6px 6px 0 0}
+.scoretab tr.crowtitle td{font-size:13.5px;font-weight:600;line-height:1.6;padding-top:14px;border-top:1px solid #E2E8F0}
+.scoretab tr.crowsum td{font-size:12.5px;font-weight:400;color:#64748B;line-height:1.72}
+/* 判定行的徽标要对齐到列的左边缘：徽标自带 8px 内边距，往左让回来（2026-10-08 用户反馈） */
+.scoretab tbody td .badge{margin-left:-8px}
+.scorebar{display:block;height:3px;background:#EDF2F8;border-radius:2px;margin-top:7px;overflow:hidden}
+.scorebar em{display:block;height:3px;border-radius:2px}
+/* ② 胜出特写：左大卡 = 建议保留那条，右两条小卡；「建议保留」右上角跟其它卡对齐 */
+.hero{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;align-items:start}
+.herocard{position:relative;display:flex;flex-direction:column;gap:10px;overflow:hidden;
+          border-radius:14px;padding:14px 18px 0;background:linear-gradient(180deg,var(--teal-50),#fff);
+          box-shadow:0 0 0 1px var(--teal-200)}
+.herocopy{margin:0;font-size:18px;font-weight:600;line-height:1.55}
+.herosum{margin:0;font-size:13.5px;color:#475569;line-height:1.82}
+.herostats{display:flex;gap:20px;padding:12px 0;border-top:1px dashed var(--teal-200)}
+.herostats span{display:block;font-size:11px;color:var(--ink-400);letter-spacing:.03em}
+.herostats b{font-size:19px}
+.runlist{display:flex;flex-direction:column;gap:12px}
+.runitem{display:flex;flex-direction:column;gap:7px;border-radius:12px;padding:14px 15px;background:#FBFCFE;
+         box-shadow:0 0 0 1px var(--line-200)}
+.herocard .cmpslot .badge:last-child,.runitem .cmpslot .badge:last-child{margin-left:auto}
+.rcopy{font-size:13px;font-weight:600;line-height:1.6}
+.rsum{font-size:12px;color:#8A95A6;line-height:1.65;max-height:3.3em;overflow:hidden}
+.runstats{display:flex;gap:14px;font-size:11.5px;color:#8A95A6;margin-top:auto}
+.runstats b{font-size:14px;color:var(--fg)}
+@media (max-width:900px){.hero{grid-template-columns:1fr}}
+.modalx{position:absolute;top:12px;right:14px;padding:2px 7px;border:0;border-radius:8px;
+  background:transparent;color:var(--dim);font-size:20px;line-height:1.2;cursor:pointer}
+.modalx:hover{background:var(--muted);color:var(--fg)}
+.mline{display:flex;gap:12px;margin:11px 0;font-size:13.5px;line-height:1.7;color:var(--fg)}
+.mline .k{flex:0 0 66px;color:var(--dim);font-size:12.5px;padding-top:1px}

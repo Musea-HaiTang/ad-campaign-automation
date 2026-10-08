@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{{ACTIVITY_TITLE}} · 投放物料（复制用）</title>
+<!-- TEMPLATE:本文件只有一个「桶块」，由 BUCKET:START / BUCKET:END 两条注释标记圈住；生成器 gen_material.py 按桶数把它复制 N 份（4–7 类都成立）再填占位符。占位符——头部:ACTIVITY_TITLE/SUBTITLE/TASK_GROUP_NAME/ACTIVITY_RULE_TEXT/END_SEAL；桶内:GP(=G1/G2/…)/LETTER/NAME/AUDIENCE/TASKNAME/KEYWORDS/KW_NOTE/TITLE_A,B,C/DESC_A,B,C/HOOK_A,B,C_KEY/HOOK_A,B,C_NOTE。改模板＝只改本文件；生成器里没有任何活动内容。 -->
+<style>
+ :root {
+ --paper: #f4eee0; --paper-deep: #ece2cb; --card: #fbf7ec;
+ --ink: #2b261e; --ink-2: #5d5445; --muted: #8f8674;
+ --line: #d6c9ad; --seal: #a53128; --seal-ink: #8e2b23;
+ --seal-soft: #f6e8e1; --seal-line: #dcb3a8;
+ --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, "STSong", serif;
+ --sans: "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+ --mono: "SF Mono", "JetBrains Mono", Consolas, monospace;
+ }
+ * { box-sizing: border-box; }
+ html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); line-height: 1.65; font-size: 14px; font-family: var(--sans); }
+ body { background-image: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(90,70,30,0.05), transparent 70%), radial-gradient(ellipse 60% 40% at 100% 100%, rgba(120,90,40,0.04), transparent 70%); background-attachment: fixed; }
+ .wrap { max-width: 980px; margin: 0 auto; padding: 22px 18px 48px; }
+ .sheet { border: 1px double var(--line); border-radius: 6px; padding: 30px 34px 40px; background: rgba(251,247,236,0.72); box-shadow: 0 1px 8px rgba(90,70,30,0.05); position: relative; }
+ .hero { text-align: center; padding-bottom: 16px; margin-bottom: 20px; border-bottom: 2px solid var(--ink); position: relative; }
+ .hero::after { content: ''; position: absolute; left: 0; right: 0; bottom: -5px; border-bottom: 1px solid var(--line); }
+ .hero h1 { margin: 0 0 6px; font-family: var(--serif); font-weight: 700; font-size: 26px; letter-spacing: 0.06em; color: var(--ink); }
+ .hero p { margin: 0; color: var(--ink-2); font-size: 13px; letter-spacing: 0.02em; }
+ .hero .ops { margin-top: 12px; font-size: 12px; color: var(--ink-2); }
+ .hero .ops b { font-weight: 600; color: var(--seal-ink); font-family: var(--serif); }
+ .hero .ops span { display: inline-block; border: 1px solid var(--seal-line); background: var(--seal-soft); color: var(--seal-ink); border-radius: 2px; padding: 2px 10px; }
+ .warn { font-size: 12.5px; color: var(--seal-ink); background: var(--seal-soft); border: 1px solid var(--seal-line); border-left: 4px solid var(--seal); padding: 9px 14px; margin-bottom: 22px; font-family: var(--serif); letter-spacing: 0.02em; }
+ .warn b { font-weight: 700; }
+ .grp { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 24px 26px 22px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(90,70,30,0.04); }
+ .grp-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+ .grp-letter { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; background: var(--seal); color: var(--paper); font-family: var(--serif); font-weight: 700; font-size: 16px; border-radius: 3px; box-shadow: inset 0 0 0 2px rgba(244,238,224,0.35); }
+ .grp-name { font-family: var(--serif); font-size: 19px; font-weight: 700; letter-spacing: 0.05em; }
+ .grp-who { font-size: 12px; color: var(--muted); margin-left: 4px; }
+ .grp-taskname { margin-left: auto; font-size: 11px; color: var(--ink-2); border: 1px dashed var(--line); padding: 2px 9px; border-radius: 2px; background: var(--paper); font-family: var(--serif); letter-spacing: 0.08em; }
+ .lbl { display: flex; align-items: center; gap: 8px; font-family: var(--serif); font-size: 13px; font-weight: 600; color: var(--ink-2); letter-spacing: 0.1em; margin: 20px 0 12px; }
+ .lbl::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+ .lbl .tag { background: var(--seal); color: var(--paper); border-radius: 2px; padding: 1px 8px; font-size: 12px; letter-spacing: 0; font-family: var(--serif); font-weight: 700; }
+ .res { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+ .res-item { border: 1px solid var(--line); border-radius: 3px; padding: 14px 15px; background: #fffdf6; position: relative; padding-right: 40px; }
+ .res-item::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--seal-line); opacity: 0.45; }
+ .res-role { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: var(--ink-2); border: 1px solid var(--line); border-radius: 2px; padding: 1px 7px; margin-bottom: 8px; font-family: var(--serif); }
+ .res-role.ctrl { color: var(--seal-ink); border-color: var(--seal-line); background: var(--seal-soft); }
+ .f { margin: 7px 0; }
+ .f .v { font-size: 14px; font-weight: 600; line-height: 1.5; }
+ .f.desc .v { font-size: 12.5px; font-weight: 400; color: var(--ink-2); }
+ .hook { margin-top: 9px; padding-top: 7px; border-top: 1px dotted var(--line); font-size: 11px; color: var(--muted); }
+ .hook b { color: var(--seal-ink); font-weight: 600; }
+ .kw { border: 1px solid var(--seal-line); border-left: 6px solid var(--seal); background: #f9f2e2; padding: 13px 16px 14px; }
+ .kw .box { font-family: var(--mono); font-size: 13px; line-height: 1.95; color: var(--ink); cursor: text; }
+ .f, .kw .box { cursor: copy; }
+.res-role { cursor: copy; }
+.res-role:hover { outline: 1px dashed var(--seal-line); outline-offset: 2px; border-radius: 2px; }
+ .f:hover, .kw .box:hover { outline: 1px dashed var(--seal-line); outline-offset: 3px; border-radius: 2px; }
+ .cp-tip { position: fixed; z-index: 9999; background: var(--seal-ink); color: #fff8ec; font-family: var(--serif); font-size: 12px; letter-spacing: .08em; padding: 4px 10px; border-radius: 2px; pointer-events: none; opacity: 0; transition: opacity .15s; box-shadow: 0 2px 6px rgba(60,30,10,.25); }
+ .cp-tip.show { opacity: 1; }
+ .kw-note { font-size: 11px; color: var(--muted); margin-top: 8px; }
+ .fix-btn { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; line-height: 24px; text-align: center; font-family: var(--serif); font-size: 12px; font-weight: 700; color: var(--paper); background: var(--seal); border: 1px solid var(--seal-ink); border-radius: 3px; padding: 0; cursor: pointer; box-shadow: 0 1px 3px rgba(120,50,30,0.35); user-select: none; opacity: 0.85; transition: opacity 0.15s, transform 0.15s; }
+ .fix-btn:hover { opacity: 1; transform: scale(1.08); }
+ .fix-btn:active { transform: scale(0.95); }
+ .fix-overlay { display: none; position: fixed; inset: 0; background: rgba(43,38,26,0.45); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+ .fix-overlay.show { display: flex; }
+ .fix-modal { background: var(--card); border: 1px double var(--line); border-radius: 4px; max-width: 560px; width: 100%; padding: 22px 26px 20px; box-shadow: 0 12px 40px rgba(60,45,20,0.25); }
+ .fix-modal h4 { margin: 0 0 2px; font-family: var(--serif); font-size: 17px; letter-spacing: 0.06em; }
+ .fix-modal .sub { font-size: 12px; color: var(--ink-2); margin-bottom: 14px; }
+ .fix-meta { font-size: 12px; color: var(--ink-2); background: var(--paper); border: 1px solid var(--line); border-radius: 3px; padding: 8px 12px; margin-bottom: 12px; line-height: 1.8; }
+ .fix-meta b { color: var(--seal-ink); }
+ .fix-meta .src { font-family: var(--serif); }
+ .fix-modal .row { margin-bottom: 10px; }
+ .fix-modal .row .lab { font-size: 11px; color: var(--muted); letter-spacing: 0.14em; margin-bottom: 3px; font-family: var(--serif); }
+ .fix-modal textarea { width: 100%; border: 1px solid var(--line); border-radius: 3px; background: #fffdf6; color: var(--ink); font-family: var(--sans); font-size: 13px; line-height: 1.6; padding: 8px 10px; resize: vertical; min-height: 70px; }
+ .fix-modal textarea:focus { outline: none; border-color: var(--seal-line); }
+ .fix-radio { display: inline-flex; gap: 4px; margin-right: 14px; align-items: center; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
+ .fix-radio input { accent-color: var(--seal); margin-right: 4px; }
+ .fix-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+ .fix-actions button { font-family: var(--serif); font-size: 13px; letter-spacing: 0.08em; border-radius: 2px; padding: 6px 16px; cursor: pointer; }
+ .fix-copy { background: var(--seal); border: 1px solid var(--seal); color: var(--paper); }
+ .fix-copy:hover { background: var(--seal-ink); }
+ .fix-close { background: transparent; border: 1px solid var(--line); color: var(--ink-2); }
+ .fix-close:hover { border-color: var(--muted); }
+ .fix-ok { font-size: 12px; color: var(--seal-ink); margin-top: 6px; text-align: right; min-height: 18px; }
+ .endmark { text-align: center; margin-top: 6px; font-family: var(--serif); font-size: 11px; letter-spacing: 0.4em; color: var(--muted); }
+ .endmark .seal { display: inline-block; background: var(--seal); color: var(--paper); padding: 2px 8px; border-radius: 2px; letter-spacing: 0.2em; font-size: 11px; margin-left: 6px; }
+ @media (max-width: 760px) { .sheet { padding: 18px 14px 28px; } .res { grid-template-columns: 1fr; } }
+
+  .grp-name.tname { cursor: pointer; border-bottom: 1px dashed transparent; transition: border-color 0.15s, color 0.15s; }
+  .grp-name.tname:hover { color: var(--seal-ink); border-bottom-color: var(--seal-line); }
+  .grp-name .copied-tip { display: inline-block; margin-left: 8px; font-size: 11px; color: var(--seal-ink); font-family: var(--serif); letter-spacing: 0.05em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+ <div class="sheet">
+
+ <header class="hero">
+ <h1>{{ACTIVITY_TITLE}}</h1>
+ <p>{{ACTIVITY_SUBTITLE}}</p>
+ <div class="ops"><span>任务组：{{TASK_GROUP_NAME}}</span></div>
+ </header>
+
+ <div class="warn"><b>文案纪律：</b>{{ACTIVITY_RULE_TEXT}}</div>
+
+ <!-- BUCKET:START -->
+<div class="grp" id="{{GP}}">
+ <div class="grp-head">
+ <span class="grp-letter">{{LETTER}}</span><span class="grp-name tname" data-taskname="{{TASKNAME}}" title="点击复制任务名">{{NAME}}</span>
+ <span class="grp-who">{{AUDIENCE}}</span>
+ <span class="grp-taskname">{{TASKNAME}}</span>
+ </div>
+ <div class="lbl"><span class="tag">①</span> 资源文案</div>
+ <div class="res">
+ <div class="res-item">
+ <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
+ <span class="res-role ctrl">对照</span>
+ <div class="f"><span class="v">{{TITLE_A}}</span></div>
+ <div class="f desc"><span class="v">{{DESC_A}}</span></div>
+ <div class="hook">钩子：<b>{{HOOK_A_KEY}}</b>，{{HOOK_A_NOTE}}</div>
+ </div>
+ <div class="res-item">
+ <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
+ <span class="res-role">实验1</span>
+ <div class="f"><span class="v">{{TITLE_B}}</span></div>
+ <div class="f desc"><span class="v">{{DESC_B}}</span></div>
+ <div class="hook">钩子：<b>{{HOOK_B_KEY}}</b>，{{HOOK_B_NOTE}}</div>
+ </div>
+ <div class="res-item">
+ <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
+ <span class="res-role">实验2</span>
+ <div class="f"><span class="v">{{TITLE_C}}</span></div>
+ <div class="f desc"><span class="v">{{DESC_C}}</span></div>
+ <div class="hook">钩子：<b>{{HOOK_C_KEY}}</b>，{{HOOK_C_NOTE}}</div>
+ </div>
+ </div>
+ <div class="lbl"><span class="tag">②</span> 客群关键词</div>
+ <div class="kw">
+ <div class="box">{{KEYWORDS}}</div>
+ </div>
+ <div class="kw-note">{{KW_NOTE}}</div>
+ </div>
+
+ <!-- BUCKET:END --><div class="endmark">{{END_SEAL}}</div>
+
+ </div>
+</div>
+
+<div class="fix-overlay" id="fixOverlay">
+ <div class="fix-modal">
+ <h4>请 AI 修改这条广告</h4>
+ <div class="sub">点击下方按钮复制请求 → 粘贴到对话中发给 AI，AI 会改完并同步更新本页。</div>
+ <div class="fix-meta" id="fixMeta"></div>
+ <div class="row">
+ <span class="lab">不满意的是</span><br>
+ <label class="fix-radio"><input type="radio" name="fixTarget" value="标题" checked> 标题</label>
+ <label class="fix-radio"><input type="radio" name="fixTarget" value="描述"> 描述</label>
+ <label class="fix-radio"><input type="radio" name="fixTarget" value="标题和描述"> 标题和描述</label>
+ </div>
+ <div class="row">
+ <div class="lab">你的要求 / 哪里不满意 / 想怎么改（或直接给新文案）</div>
+ <textarea id="fixNote" placeholder="例：标题太抽象，不吸引人。想要直白一点，强调免费和 80 元券。"></textarea>
+ </div>
+ <div class="fix-actions">
+ <button class="fix-close" id="fixClose">关闭</button>
+ <button class="fix-copy" id="fixCopy">复制修改请求</button>
+ </div>
+ <div class="fix-ok" id="fixOk"></div>
+ </div>
+</div>
+<script>
+(function () {
+ function $(id) { return document.getElementById(id); }
+ var overlay = $('fixOverlay');
+ if (!overlay) { return; }
+ var cpTipEl = null;
+ function showCpTip(x, y, msg) {
+  if (!cpTipEl) { cpTipEl = document.createElement('div'); cpTipEl.className = 'cp-tip'; document.body.appendChild(cpTipEl); }
+  cpTipEl.textContent = msg;
+  cpTipEl.style.left = Math.min(x + 10, window.innerWidth - 130) + 'px';
+  cpTipEl.style.top = Math.max(y - 32, 4) + 'px';
+  cpTipEl.classList.add('show');
+  clearTimeout(cpTipEl._t);
+  cpTipEl._t = setTimeout(function () { cpTipEl.classList.remove('show'); }, 1300);
+ }
+ function copyText(txt) {
+ try {
+ var ta = document.createElement('textarea');
+ ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+ document.body.appendChild(ta); ta.focus(); ta.select();
+ var okExec = false; try { okExec = document.execCommand('copy'); } catch (e) {}
+ document.body.removeChild(ta);
+ if (okExec) return Promise.resolve(true);
+ } catch (e) {}
+ if (navigator.clipboard && navigator.clipboard.writeText) {
+ return navigator.clipboard.writeText(txt).then(function(){ return true; }, function(){ return false; });
+ }
+ return Promise.resolve(false);
+ }
+ function buildReq(target, note, cur) {
+ var lines = [];
+ lines.push('【修改广告】投放物料');
+ lines.push('目标：' + cur.grp + ' · ' + cur.role);
+ lines.push('修改对象：' + target);
+ lines.push('标题原文：' + (cur.title || '（空）'));
+ lines.push('描述原文：' + (cur.desc || '（空）'));
+ lines.push('修改要求：' + (note || '（未填，请 AI 按常识判断怎么改更好）'));
+ return lines.join('\\n');
+ }
+ document.addEventListener('click', function (e) {
+ var btn = e.target;
+ if (!btn || !btn.classList) return;
+ if (btn.classList.contains('tname')) {
+   var taskName = btn.getAttribute('data-taskname') || btn.textContent;
+   if (taskName) {
+     copyText(taskName).then(function (ok) {
+       var tip = btn.querySelector('.copied-tip');
+       if (!tip) { tip = document.createElement('span'); tip.className = 'copied-tip'; btn.appendChild(tip); }
+       tip.textContent = ok ? '已复制' : '复制失败，请手动选中';
+       clearTimeout(tip._timer);
+       tip._timer = setTimeout(function () { tip.textContent = ''; }, 3000);
+     });
+   }
+   return;
+ }
+ var cpRow = btn.closest('.f');
+ if (cpRow) {
+  var v = cpRow.querySelector('.v');
+  var txt = (v || cpRow).textContent;
+  if (txt) {
+   e.preventDefault();
+   copyText(txt.replace(/\s+/g, ' ').trim()).then(function (ok) { showCpTip(e.clientX, e.clientY, ok ? '已复制' : '复制失败，请手动选中'); });
+  }
+  return;
+ }
+ var cpRole = btn.closest('.res-role');
+ if (cpRole) {
+  var roleTxt = cpRole.textContent.trim();
+  var grpEl = cpRole.closest('.grp');
+  var tnEl = grpEl ? grpEl.querySelector('.grp-name.tname') : null;
+  var tnv = tnEl ? (tnEl.getAttribute('data-taskname') || tnEl.textContent) : '';
+  var head = tnv.split(' · ')[0] || tnv;
+  var label = (head ? head + ' · ' : '') + roleTxt;
+  if (label) {
+   e.preventDefault();
+   copyText(label).then(function (ok) { showCpTip(e.clientX, e.clientY, ok ? '已复制' : '复制失败，请手动选中'); });
+  }
+  return;
+ }
+ var cpKw = btn.closest('.box');
+ if (cpKw) {
+  var ktxt = cpKw.textContent;
+  if (ktxt) {
+   e.preventDefault();
+   copyText(ktxt.trim()).then(function (ok) { showCpTip(e.clientX, e.clientY, ok ? '已复制' : '复制失败，请手动选中'); });
+  }
+  return;
+ }
+ if (!btn.classList.contains('fix-btn')) return;
+ var card = btn.closest('.res-item');
+ if (!card) return;
+ var g = card.closest('.grp');
+ var grp = '';
+ if (g) { var ln = g.querySelector('.grp-letter'); var nm = g.querySelector('.grp-name'); grp = (ln ? ln.textContent : '') + '类 · ' + (nm ? nm.textContent : ''); }
+ var r = card.querySelector('.res-role');
+ var role = r ? r.textContent : '';
+ var t = card.querySelector('.f:not(.desc) .v');
+ var d = card.querySelector('.f.desc .v');
+ var title = t ? t.textContent : ''; var desc = d ? d.textContent : '';
+ var cur = { grp: grp, role: role, title: title, desc: desc };
+ var metaEl = $('fixMeta'), noteEl = $('fixNote'), okEl = $('fixOk');
+ if (metaEl) {
+ metaEl.innerHTML = '<div class="src"><b>目标广告：</b>' + grp + ' · ' + role + '</div>'
+ + '<div><b>标题原文：</b>' + (title || '（空）') + '</div>'
+ + '<div><b>描述原文：</b>' + (desc || '（空）') + '</div>';
+ }
+ if (noteEl) noteEl.value = ''; if (okEl) okEl.textContent = '';
+ overlay.classList.add('show');
+ var copyBtn = $('fixCopy');
+ if (copyBtn) {
+ copyBtn.onclick = function () {
+ var checked = document.querySelector('input[name="fixTarget"]:checked');
+ var target = checked ? checked.value : '标题和描述';
+ var note = noteEl ? noteEl.value.trim() : '';
+ var req = buildReq(target, note, cur);
+ copyText(req).then(function (ok) {
+ if (okEl) okEl.textContent = ok ? ' 已复制，请粘贴到对话发给 AI' : ' 复制失败，请手动全选上方文字复制';
+ });
+ };
+ }
+ });
+ var closeBtn = $('fixClose');
+ if (closeBtn) closeBtn.onclick = function () { overlay.classList.remove('show'); };
+ overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.classList.remove('show'); });
+})();
+</script>
+</body>
+</html>

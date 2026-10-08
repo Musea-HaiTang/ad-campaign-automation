@@ -1,0 +1,19 @@
+# 投放物料（HTML）说明
+
+> 物料 HTML = 给人看的界面；模板与交互约定在本文件。生成器见 ../工具/gen_material.py。
+
+## 模板与生成
+- 模板：`模板/书卷墨色投放物料模板.html`。**里面只有一个桶块**，由 `<!-- BUCKET:START -->` / `<!-- BUCKET:END -->` 两条注释圈住；生成器按**桶数**复制 N 份（4–7 类都成立，不再写死 7 类）。
+- 占位符：头部 `{{ACTIVITY_TITLE}}` / `{{SUBTITLE}}` / `{{TASK_GROUP_NAME}}` / `{{ACTIVITY_RULE_TEXT}}` / `{{END_SEAL}}`；桶内**不带序号**——`{{GP}}`（= G1/G2/…）、`{{LETTER}}` / `{{NAME}}` / `{{AUDIENCE}}` / `{{TASKNAME}}` / `{{KEYWORDS}}` / `{{KW_NOTE}}` / `{{TITLE_A,B,C}}` / `{{DESC_A,B,C}}` / `{{HOOK_A,B,C_KEY}}` / `{{HOOK_A,B,C_NOTE}}`。
+- 纪律条（`{{ACTIVITY_RULE_TEXT}}`）由生成器拼，**只两类内容**：全局红线（固定注入 `忌「翻墙」字样…`，见 `../流程文档/CSDN广告投放自动化流程.md` §0）+ 活动定义 `activity.ruleText` 里**用户给的活动特例**（可空）。生成器不产生任何活动内容，也不揣测特例（§3）。
+- 桶名（`{{TASKNAME}}`）由命名模块算出，模板里不写死格式，见 `../../automation/campaigns/README.md` 的命名约定。
+- 生成：`python ../工具/gen_material.py --def activities/{活动}/活动定义.yaml`（读活动定义 → 套模板 → 出成品）。
+
+## 物料 HTML 的交互功能
+- 一键复制：点击即复制 任务名行(.tname) / 资源标题(.f) / 摘要(.f.desc) / 客群关键词串(.kw .box)；实现 = 事件委托 closest + 全局 .cp-tip 提示「已复制」，复制后清选区；hover = cursor:copy + 朱砂虚线。
+- AI 修改请求：每张广告卡右上角「改」按钮 → 弹浮层带出 类/资源/标题/描述 → 用户填要求 → 复制结构化请求 → 粘回对话，AI 定位该卡片改写 HTML。
+
+## 编辑注意
+- 物料 HTML 可能被预览编辑器自动重构：注入 `data-page-node-id`、`res-role` 简化为「对照/实验1/实验2」。Edit 前先 Read/Grep 最新内容。
+- 模板本身已不含 `data-page-node-id`（那是预览编辑器注入的，CSS/JS 都不用；模板留一份干净的，产出才可复现）。生成器产出的成品里不会再出现它；若某个成品被预览编辑器打开过，它可能又出现——以文件现状为准。
+- 同文件多处修改用一次性 python 脚本原子写回（read→replace→write），禁并行多 Edit（曾因并行 Edit 被后写覆盖）。

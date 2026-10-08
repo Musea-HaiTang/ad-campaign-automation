@@ -1,0 +1,30 @@
+# ---- 本仓库（上传线）额外不收录的东西：真实活动的业务数据 ----
+# 活动配置（关键词组、分发名单、活动链接、受众定义）
+activities/*/配置/
+# 后续批次与整活动 YAML（含文案原文）
+activities/*/调整/
+# 物料与复盘报告（客户文案、投放结论）
+activities/*/物料/
+# 取数流水 / 看板导出 / 圈选记录
+activities/*/数据/**
+!activities/*/数据/README.md
+# 彩排借用对象的 id
+activities/_验证数据/配置/
+# 投放数据台账与经验（真实曝光点击数字）
+ad_output/memory/
+# 数据平台圈选录制与实验物料
+_experiments/
+
+# ---- 下面是原仓库就有的 ----
+.browser-profile/
+node_modules/
+*.log
+_*.html
+_*.js
+automation/_tmp/
+__pycache__/
+.venv/
+.pytest_cache/
+pytest-cache-files-*/
+activities/*/日志/
+activities/_db/
