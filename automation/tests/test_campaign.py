@@ -360,6 +360,12 @@ class DiscoverTest(unittest.TestCase):
         self._write("B活动/配置/b.yaml", self._cfg("B活动-hang"))
         self.assertEqual(self._ids(), ["A活动-hang", "B活动-hang"])
 
+    def test_下划线开头的目录不入册(self):
+        """示例 / 彩排 / 工具目录（`_` 开头）不混进看板的活动下拉（2026-10-08）。"""
+        self._write("_示例活动/配置/x.yaml", self._cfg("示例活动-hang"))
+        self._write("A活动/配置/a.yaml", self._cfg("A活动-hang"))
+        self.assertEqual(self._ids(), ["A活动-hang"])
+
     def test_调整目录里的批次yaml不纳管(self):
         self._write("A活动/配置/a.yaml", self._cfg("A活动-hang"))
         self._write("A活动/调整/2026-09-29-七批.yaml", self._cfg("A活动-hang"))

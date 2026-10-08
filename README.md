@@ -20,26 +20,65 @@
 | `activities/_活动细则模板.md` | 活动定义模板：新活动照它填 |
 | `activities/*/README.md` | 各活动目录的说明骨架（数据说明） |
 
-## 5 分钟能跑到什么程度
+## 快速上手（第一次跑，约 15 分钟）
 
-不需要后台账号，先跑这些：
+### 第 0 步：装环境（一次就够）
 
 ```powershell
 pip install -r requirements.txt
-.venv\Scripts\python.exe -m playwright install chromium   # 取数/建批要用浏览器
-.venv\Scripts\python.exe -m pytest automation/tests -q    # 全绿就说明环境没问题
-.venv\Scripts\python.exe automation/scripts/check_batch_plan.py --config <批次.yaml>   # 离线自检：这批该建几条
-web\start.bat                                             # 看板（库是空的 → 页面空表，但界面能看）
+.venv\Scripts\python.exe -m playwright install chromium            # 建批 / 取数要用浏览器
+.venv\Scripts\python.exe -m pytest automation/tests -q             # 全绿 = 环境没问题（279 条，约 13 秒）
 ```
 
-**要到"能真跑一个活动"，还需要三样东西**（仓库里没有，得自己准备）：
+### 第 1 步：**不用账号**，先把看板点亮看长什么样
 
-1. **一个活动定义**：照 `activities/_活动细则模板.md` 写 → 生成
-   `activities/{活动名}/配置/{品牌}{负责人}.yaml`（整活动 YAML 是唯一入口，所有脚本都吃它）。
-2. **登录态**：`python automation/scripts/wait_login.py` 手工登录一次 CSDN 广告后台
-   （登录 profile 存在 `.browser-profile/`，**不进 git**）。
-3. **判定门槛**：`activities/{活动名}/配置/判定门槛.yaml`（每个桶的曝光门槛 + 达标线，
-   不配也能跑，看板会降级显示）。
+仓库里带了一份**脱敏示例活动**（`activities/_示例活动/`）和一个**假数据种子**：
+
+```powershell
+.venv\Scripts\python.exe automation/scripts/seed_demo.py
+.venv\Scripts\python.exe web/app.py --db activities/_db/示例看板.db --port 8788
+#    浏览器打开 http://127.0.0.1:8788
+```
+
+看到的完整界面：分桶统计（一行 = 该桶最新那个任务）、批次之间（最新 → 最老）、
+点行弹出的**三条文案对比**——A 桶过门槛走「胜出特写」，B 桶没到门槛走「记分卡」，还有待复盘角标。
+假数据只写 `activities/_db/示例看板.db`，**不会碰真实台账库**。
+
+### 第 2 步：离线自检一份活动定义（不连后台）
+
+```powershell
+.venv\Scripts\python.exe automation/scripts/check_batch_plan.py --config "activities/_示例活动/调整/2026-01-08-二批.yaml"
+#   ✓ 自检通过：权重 / 位次 / 名字↔槽位 / 工单字段 都没问题（1 桶）
+```
+
+### 第 3 步：连后台（**这一步必须有 CSDN 广告后台的账号**）
+
+登录**只能手工做一次**——脚本不碰、也不该存你的密码：
+
+```powershell
+# 会起一个有头浏览器，你在里面手工登录；登完它自己检测到就退出
+.venv\Scripts\python.exe automation/scripts/wait_login.py --minutes 10
+# 数据平台（圈选导出用）是另一套登录态，要单独登：
+.venv\Scripts\python.exe automation/scripts/wait_login.py --site databi --minutes 10
+```
+
+登录态存在 `.browser-profile/`（**不进 git、不上传**），之后建批 / 取数都复用它。
+
+⚠ 三个坑先说在前：
+
+- **一个登录 profile 同时只能被一个进程用**：看板服务开着时别再跑建批 / 取数，
+  否则报"浏览器起不来"；要抢就先停服务（`web/README.md` 里有完整顺序）。
+- **登录态会过期**，过期后任何取数都会失败，重跑一次 `wait_login.py` 就行。
+- **没有账号怎么办**：第 1、2 步照样能跑（界面 + 自检 + 单测）；再往下的建批 / 取数 / 判定
+  是**读你自己账号里的数据**，没有号跑不了——这不是配置问题，是权限问题。
+
+### 真跑一个活动要准备的三样东西
+
+1. **活动定义**：复制 `activities/_示例活动/配置/示例活动-hang.yaml` 改成你自己的；
+   完整流程（摸产品 → 分人群 → 写文案 → 出物料 → 建批 → 复盘）见
+   `ad_output/流程文档/CSDN广告投放自动化流程.md`。
+2. **登录态**：上面第 3 步。
+3. **判定门槛**：`activities/{活动名}/配置/判定门槛.yaml`（每个桶的曝光门槛 + 达标线；不配也能跑，看板降级显示）。
 
 ## 一个活动的完整链路
 

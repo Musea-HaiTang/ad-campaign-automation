@@ -1,0 +1,9 @@
+# 判定门槛（业务口径，只放这一份）：桶内**累计曝光**攒到 threshold 才判点击；
+# 达标线 = 实际点击率 ≥ passCtr（千三）；resources = 这个桶挂几条资源（决定每轮最多留几条幸存）。
+#
+# ⚠ 2026-10-08 起这里**不再有** `batch` / `batchConfig`：桶独立之后"当前批"是每个桶自己的
+#   （= 该桶最后一次建批，规则在 campaign.bucket_current），换批不用改这份文件。
+passCtr: 0.003
+buckets:
+  A: {threshold: 3000, resources: 3}
+  B: {threshold: 1000, resources: 2}

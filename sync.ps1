@@ -6,7 +6,7 @@ param([string]$Src = 'D:\Codex_WorkingSpace\ad_management')
 
 $dst = $PSScriptRoot
 $paths = @('automation', 'web', 'ad_output', 'activities', 'requirements.txt', 'pytest.ini', 'AGENTS.md')
-$exclude = '^(activities/[^/]+/(配置|调整|物料|日志)/|activities/[^/]+/数据/(?!README\.md$)|' +
+$exclude = '^(activities/(?!_示例活动/)[^/]+/(配置|调整|物料|日志)/|activities/[^/]+/数据/(?!README\.md$)|' +
            'activities/_验证数据/配置/|ad_output/memory/|_experiments/)'
 
 $tracked = git -c core.quotepath=false -C $Src ls-files -- $paths

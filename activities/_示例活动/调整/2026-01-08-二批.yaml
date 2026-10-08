@@ -1,0 +1,76 @@
+# 示例活动的**第二批**：只有 A 桶（演示"桶独立"——A 复盘快、跑到二批，B 还停在首批）。
+# 后续批次只写**要重投的桶**；名字加 nameSuffix（-2）避免后台重名。
+version: 1
+adType: blog-page-t0
+label: 示例活动-hang-3类
+controls:
+  channelType: 页面类
+  channel: PC-博客-详情页-相关推荐T0
+  materialPath:
+  - 静态广告
+  - 信息流
+  - 文本
+  defaults:
+    businessLine: 示例事业部
+    isPopup: false
+    adClient: 广告
+    closeBtnColor: 浅色
+  fields:
+    title:
+      placeholder: 请输入广告标题
+    summary:
+      placeholder: 请输入广告摘要
+      type: textarea
+    link:
+      placeholder: 请输入点击链接
+campaign:
+  brand: 示例活动
+  owner: hang
+  namePrefix: 示例活动-hang
+  taskGroupName: 示例活动-hang
+  activityLink: https://example.com/activity
+audiences:
+- id: A
+  topic: 示例人群 A / 写代码的人
+  target: 用 AI 工具写代码的开发者（示例）
+  taskName: 示例活动-hang-A类
+  subBusinessLine: 示例业务线
+  nameSuffix: '-2'
+  distributionList: 示例活动-hang-A类 · 示例人群-1
+  keywordGroup:
+    keywords: 示例关键词1,示例关键词2,代码助手,编程助手,提示词
+  resources:
+  - role: control
+    name: 示例活动-hang-A类 · 对照-2
+    title: 示例标题（对照-2）：留下上一批有点击的写法
+    summary: 示例摘要（对照-2）——上一批有点击的，按点击排序留下。
+    highlight: ''
+  - role: experiment1
+    name: 示例活动-hang-A类 · 实验1-2
+    title: 示例标题（实验1-2）：零点击的换掉
+    summary: 示例摘要（实验1-2）——上一批 0 击的文案换新角度。
+    highlight: 示例词
+  abGroups:
+  - label: 对照组
+    resource: 示例活动-hang-A类 · 对照-2
+    weightPct: 50
+  - label: 实验组1
+    resource: 示例活动-hang-A类 · 实验1-2
+    weightPct: 50
+taskOrder:
+  businessLine: 示例事业部
+  taskGroup: 示例活动-hang
+  taskName: 示例活动-hang-A类 · 示例人群 A / 写代码的人-2
+  channel: PC-博客-详情页-相关推荐T0
+  channelSizeId: 后台点渠道自动带上
+  price: 30
+  deliveryDate:
+    mode: set_time
+    start: '2026-01-08'
+    end: '2026-01-20'
+    timeStart: 8
+    timeEnd: 23
+  exposureCaps:
+    daily: 100000
+    weekly: 500000
+    total: 500000

@@ -221,6 +221,8 @@ def discover(root="activities", only=None, log=None):
 
     - **只扫 `{活动}/配置/*.yaml`**：`调整/` 下那些批次 YAML（如 `2026-09-29-七批.yaml`）
       是同一个任务组的重投批次，**不入册**，否则一个活动会冒出好几份。
+    - **下划线开头的目录不入册**（2026-10-08 定）：`activities/_示例活动/`、`activities/_验证数据/`
+      这类是示例 / 彩排 / 工具目录，照样能用 `--config` 显式点名，只是不混进看板的活动下拉。
     - **按 `campaign.taskGroupName` 去重**：撞车直接报错并列路径，不静默挑一个
       （任务组名就是后台对象的分组键，两个活动同名 = 数据会混在一起）。
     - `only` 指定单个 YAML 时**装不上就报错**（用户显式点名，不静默跳过）。
@@ -231,7 +233,8 @@ def discover(root="activities", only=None, log=None):
     if only:
         cands = [os.path.abspath(only)]
     else:
-        cands = sorted(glob.glob(os.path.join(os.path.abspath(root), "*", "配置", "*.yaml")))
+        cands = sorted(p for p in glob.glob(os.path.join(os.path.abspath(root), "*", "配置", "*.yaml"))
+                       if not os.path.basename(os.path.dirname(os.path.dirname(p))).startswith("_"))
     out, seen = [], {}
     for p in cands:
         try:
