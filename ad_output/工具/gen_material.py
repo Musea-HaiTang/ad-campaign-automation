@@ -4,6 +4,10 @@
 用法:
     python gen_material.py --def activities/{活动}/活动定义.yaml [--out ...]
 
+⚠ **只在活动首投用**（用户 2026-10-09 定）：HTML 的用途是"给人看一版排好版的文案稿"，
+  只有新活动第一次定桶与文案时才出；**复盘重投不再出 HTML**（交付 = 复盘报告里的定稿文案 +
+  `物料/文案自审/文案自审记录-{日期}.md`）。复盘批次若历史上出过 HTML，归 `物料/投放物料/` 存档。
+
 数据/代码分离：活动内容（标题/分桶/关键词/文案）全部来自活动定义 YAML，
 本脚本只做「套模板 + 填空 + 占位符校验」，不含任何活动内容。
 名字（桶名/物料文件名）不在这里拼，一律问 naming 模块要（`automation/scripts/naming.py`）。
@@ -102,14 +106,18 @@ def build(d, out_path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--def", required=True, dest="def_path", help="活动定义 YAML")
-    ap.add_argument("--out", default=None, help="输出 HTML（默认 activities/{活动}/物料/{前缀}-{N}类投放物料.html）")
+    ap.add_argument("--out", default=None,
+                    help="输出 HTML（默认 activities/{活动}/物料/投放物料/{前缀}-{N}类投放物料.html）")
     a = ap.parse_args()
 
     d = yaml.safe_load(Path(a.def_path).read_text(encoding="utf-8"))
     if a.out:
         out = Path(a.out)
     else:
-        out = Path(a.def_path).resolve().parent / "物料" / \
+        # 定义文件通常落在 `配置/`：上跳一层才是活动目录（老实现少跳一层，会把成品写进 `配置/物料/`）
+        defp = Path(a.def_path).resolve()
+        act_dir = defp.parent.parent if defp.parent.name == "配置" else defp.parent
+        out = act_dir / "物料" / "投放物料" / \
             naming.material_file_name(d["campaign"], len(d["buckets"]))
     p = build(d, out)
     print("OK wrote", p)
