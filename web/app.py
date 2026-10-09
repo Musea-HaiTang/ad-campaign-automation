@@ -26,12 +26,18 @@
                                （页面右上角那个角标 + 弹窗；跨活动，所以只能服务端算）
     GET /api/snapshots         取数流水（原始存档）清单——不是数据源，只是取数凭据
     GET /api/fetch/status      取数状态（正在跑没 / 上次取数时刻 / 今天取过数没）
+    GET /api/fetch/status?all=1  **一次刷全部活动**那一批的进度（哪个在跑 / 哪个跑完 / 跳过谁）
     POST /api/fetch            **取数**：把昨天的数固定下来（默认区间＝到昨天，落取数流水）
                                —— **一天只允许一次**（用户 2026-09-20 定：昨天不会再变，重复取没意义）
     POST /api/fetch?today=1    **刷新今天**：只查今天这一天（常驻浏览器后实测
                                首次 ≈1.8 秒、之后 0.9~1.1 秒），随时可以点
                                —— 两个模式共用「同时只跑一个」的闸，互不占用对方的配额；
                                刷新**不落取数流水**（数据进台账库就够，免得一天堆一堆文件夹）
+
+    用户 2026-10-09 定：**页面上的「刷新」「取数」= 一次把所有登记的活动都跑一遍**
+    （`?all=1`，顺序 = 当前看的活动先跑）。理由：浏览器只有一只、取数本来就串行，
+    分开点并不会更快；而「待复盘」角标是跨活动的，只刷一个活动它必然半新半旧。
+    单活动的 `?activity=xxx` 仍然保留（自动刷新、脚本、命令行都还在用）。
 
     （以上除 `/` 与页面资源外，都可以带 `?activity=<任务组名>`；不给 = 默认活动。
       「同时只跑一个」是**全局**的——浏览器只有一只；「今天已取」是**按活动**算的。）
@@ -104,6 +110,11 @@ AUTO_STEP = 30                      # 计时线程每 30 秒醒一次看该不�
 TODO_CACHE = {"at": 0.0, "payload": None}
 TODO_TTL = 60
 
+# 「一次刷所有活动」的那一批（2026-10-09 用户定）：页面点刷新 / 取数 = 登记的活动全跑一遍。
+# 这里只记"这一批点了谁、什么模式、什么时候点的"；每个活动的进度仍从 `FETCH` 现读——
+# 两处各记一份状态迟早对不上（`FETCH` 是取数线程写的唯一真源）。
+BATCH = {"mode": None, "at": None, "ids": [], "skipped": []}
+
 
 def new_fetch_state():
     """一个活动的取数状态（形状与改造前一致，页面不用改字段名）。"""
@@ -123,6 +134,11 @@ def pick(query):
     """`?activity=` 里的活动 → (登记项, 请求里写的那个名字)；没给就用默认活动。"""
     wanted = (query.get("activity") or [""])[0] or DEFAULT_ID
     return activity(wanted), wanted
+
+
+def flag(query, name):
+    """`?<name>=1` 这种开关（页面统一这么传；`true` / `yes` 也认）。"""
+    return (query.get(name) or ["0"])[0] in ("1", "true", "yes")
 
 
 def snap_time(name):
@@ -185,7 +201,20 @@ def fetch_state(item):
             "busy": bool(busy and busy != item["id"]),
             "busyWith": busy if busy != item["id"] else None,
             "lastFetch": last, "lastFetchTime": snap_time(last), "db": db_state(item),
-            "todayDone": bool(done), "todayFetch": done}
+            "todayDone": bool(done), "todayFetch": done,
+            # 「取数」按钮看 todayDoneAll（2026-10-09 起取数是**一次刷全部活动**）：
+            # 只按当前活动算的话，会出现"按钮说今天已取、其实另一个活动还没取"。
+            "todayDoneAll": bool(ACTIVITIES) and today_fetched_all()}
+
+
+def today_fetched_all():
+    """所有登记的活动今天都取过数没（配额仍是**按活动**各算一份，这里只是取交集）。"""
+    return all(today_fetched(it) for it in ACTIVITIES.values())
+
+
+def invalidate_todo():
+    """新数进库 → 待复盘清单作废（用户 2026-10-09：刷新 / 取数完角标必须跟着变）。"""
+    TODO_CACHE["at"], TODO_CACHE["payload"] = 0.0, None
 
 
 def running_activity():
@@ -212,9 +241,14 @@ def todo_payload():
     规则本体在 `perf_payload.todo_rows()`——与 `/api/perf` 共用同一套判定
     （`judging.py`），不在页面里另抄一份（口径抄第二遍迟早跟第一份走散）。
     算不出来的活动（库里还没数据 / YAML 坏了）**跳过并打一行**，不让一个活动拖垮整份清单。
+
+    ⚠ 缓存（2026-10-09 修）：**取数正在跑的时候不吃缓存、也不写缓存**——那一刻库是
+    "只有一部分活动是新数"的样子，缓存了会给页面看半分钟旧清单（页面角标显示 1、
+    表格里明明有三条，就是这么来的）。取数线程每跑完一个活动会 `invalidate_todo()`。
     """
     now = time.time()
-    if TODO_CACHE["payload"] is not None and now - TODO_CACHE["at"] < TODO_TTL:
+    running = running_activity() is not None
+    if not running and TODO_CACHE["payload"] is not None and now - TODO_CACHE["at"] < TODO_TTL:
         return TODO_CACHE["payload"]
     items = []
     for item in ACTIVITIES.values():
@@ -235,7 +269,8 @@ def todo_payload():
     items.sort(key=lambda r: (-(r["exposure"] / r["threshold"]) if r["threshold"] else 0, r["task"]))
     out = {"count": len(items), "items": items,
            "generated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
-    TODO_CACHE["at"], TODO_CACHE["payload"] = now, out
+    if not running:                      # 取数中途的清单不进缓存（下一问重算就是新的）
+        TODO_CACHE["at"], TODO_CACHE["payload"] = now, out
     return out
 
 
@@ -336,8 +371,65 @@ def fetch_worker():
         finally:
             st["running"] = False
             st["finished"] = datetime.datetime.now().strftime("%H:%M:%S")
+            invalidate_todo()          # 新数进库 → 待复盘清单作废（角标别停在旧数字上）
     BROWSER.close()
     print("  浏览器：已关闭", flush=True)
+
+
+def batch_state():
+    """页面那条"正在刷新 2/3：火山…"的进度（一次刷全部活动，2026-10-09 用户定）。
+
+    每个活动的状态**现读 `FETCH`**（取数线程写的唯一真源）；这里只负责排序 + 数个数。
+    没跑过任何一批时返回空 items，页面据此不显示进度。
+    """
+    skipped = {s["activity"]: s for s in BATCH["skipped"]}
+    items = []
+    for aid in list(BATCH["ids"]) + [s["activity"] for s in BATCH["skipped"]]:
+        item = ACTIVITIES.get(aid)
+        if item is None:                       # 活动被移除了：跳过，别让进度卡住
+            continue
+        if aid in skipped:
+            items.append({"activity": aid, "label": item["label"], "state": "skipped",
+                          "note": skipped[aid]["note"], "started": None, "finished": None,
+                          "error": None})
+            continue
+        st = FETCH.setdefault(aid, new_fetch_state())
+        state = ("running" if st["running"] else
+                 "ok" if st["ok"] else
+                 "error" if st["ok"] is False else "pending")
+        items.append({"activity": aid, "label": item["label"], "state": state, "note": None,
+                      "started": st["started"], "finished": st["finished"], "error": st["error"]})
+    return {"mode": BATCH["mode"], "at": BATCH["at"], "items": items,
+            "total": len(items), "done": sum(1 for i in items if i["state"] != "pending"
+                                             and i["state"] != "running"),
+            "running": any(i["state"] in ("pending", "running") for i in items),
+            "okCount": sum(1 for i in items if i["state"] == "ok"),
+            "errorCount": sum(1 for i in items if i["state"] == "error"),
+            "skippedCount": sum(1 for i in items if i["state"] == "skipped")}
+
+
+def busy_reason():
+    """现在能不能投任务；不能就给一句给人看的原因（`None` = 可以）。
+
+    队列非空也算忙（2026-10-09 加）：一次刷全部活动时，两个任务中间有一瞬间
+    `running_activity()` 是 None——不把队列算进来，自动刷新 / 手快点第二下就会重复排队。
+    """
+    busy = running_activity()
+    if busy:
+        return "正在取数中（%s），等这一批跑完再点" % busy
+    if not JOBS.empty():
+        return "队列里还排着 %d 个任务没跑完，等这一批跑完再点" % JOBS.qsize()
+    return None
+
+
+def enqueue_fetch(item, mode, by):
+    """把一次取数**塞进队列**（不查闸）：状态先写上再排队——页面轮询靠它。"""
+    st = FETCH[item["id"]]
+    st.update({"running": True, "mode": mode,
+               "started": datetime.datetime.now().strftime("%H:%M:%S"),
+               "finished": None, "ok": None, "snapshot": None, "error": None, "by": by})
+    st["lines"].clear()
+    JOBS.put((item["id"], mode))
 
 
 def start_fetch(aid, mode="full", force=False, by="manual"):
@@ -350,23 +442,54 @@ def start_fetch(aid, mode="full", force=False, by="manual"):
     item = activity(aid)
     if item is None:
         return 404, {"error": "没有这个活动：%s" % aid}
-    busy = running_activity()
+    busy = busy_reason()
     if busy:
-        return 409, {"error": "正在取数中（%s），等这一次跑完再点" % busy,
-                     "state": fetch_state(item)}
+        return 409, {"error": busy, "state": fetch_state(item)}
     today = datetime.date.today().isoformat()
     if mode == "full" and not force:
         done = today_fetched(item)
         if done:
             return 409, {"error": "今天已经取过数了（%s）——昨天不会再变；今天的实时数请点「刷新」" % done,
                          "blocked": True, "state": fetch_state(item)}
-    st = FETCH[item["id"]]
-    st.update({"running": True, "mode": mode,
-               "started": datetime.datetime.now().strftime("%H:%M:%S"),
-               "finished": None, "ok": None, "snapshot": None, "error": None, "by": by})
-    st["lines"].clear()
-    JOBS.put((item["id"], mode))
+    enqueue_fetch(item, mode, by)
     return 202, {"started": True, "activity": item["id"], "state": fetch_state(item)}
+
+
+def start_fetch_all(mode="today", current=None, force=False, by="manual"):
+    """**一次把登记的活动全跑一遍**（用户 2026-10-09 定）：页面的刷新 / 取数都走这里。
+
+    为什么改成这样：浏览器只有一只、取数本来就是串行的，"一次只刷一个活动"没有省下任何时间，
+    只是把一条队列拆成好几次点击；而「待复盘」角标是**跨活动**的，只刷一个活动它必然半新半旧。
+    顺序 = **当前看的活动先跑**，其余按登记顺序（眼前这块先变新）。
+
+    `full`（取数）仍按活动各算「一天一次」的配额：已经取过的**跳过、并在结果里说明**，
+    不整批报错（自动刷新每天早上已经把 full 跑过一遍，手动再点通常就是"只剩某个活动没取"）。
+    """
+    busy = busy_reason()
+    if busy:
+        return 409, {"error": busy, "batch": batch_state()}
+    ids = list(ACTIVITIES)
+    if current in ids:
+        ids.remove(current)
+        ids.insert(0, current)
+    run, skipped = [], []
+    for aid in ids:
+        item = ACTIVITIES[aid]
+        if mode == "full" and not force:
+            done = today_fetched(item)
+            if done:
+                skipped.append({"activity": aid, "note": "今天已经取过数了（%s）" % done})
+                continue
+        run.append(aid)
+    if not run:
+        return 409, {"error": "所有活动今天都取过数了——昨天不会再变；今天的实时数请点「刷新」",
+                     "blocked": True, "batch": batch_state()}
+    BATCH.update({"mode": mode, "at": datetime.datetime.now().strftime("%H:%M:%S"),
+                  "ids": run, "skipped": skipped})
+    for aid in run:
+        enqueue_fetch(ACTIVITIES[aid], mode, by)
+    return 202, {"started": True, "mode": mode, "activities": run,
+                 "skipped": [s["activity"] for s in skipped], "batch": batch_state()}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -412,6 +535,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/todo":                 # 跨活动：不吃 ?activity=，就在 pick() 之前拦下来
             self._json(200, todo_payload())
             return
+        if u.path == "/api/fetch/status" and flag(q, "all"):
+            # 一次刷全部活动的进度（2026-10-09）：跨活动，也拦在 pick() 之前
+            self._json(200, {"batch": batch_state(), "anyRunning": running_activity()})
+            return
         item, wanted = pick(q)
         if item is None:
             self._json(404, {"error": "没有这个活动：%s" % wanted})
@@ -442,13 +569,21 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == "/api/fetch":
+            if flag(q, "all"):
+                # 页面上的刷新 / 取数 = 一次跑全部活动（2026-10-09 用户定）；
+                # `?activity=` 只用来决定"谁先跑"，不影响跑哪些。
+                cur = pick(q)[0]
+                code, obj = start_fetch_all("today" if flag(q, "today") else "full",
+                                            current=cur["id"] if cur else None,
+                                            force=flag(q, "force"))
+                self._json(code, obj)
+                return
             item, wanted = pick(q)
             if item is None:
                 self._json(404, {"error": "没有这个活动：%s" % wanted})
                 return
-            force = (q.get("force") or ["0"])[0] in ("1", "true", "yes")
-            today_only = (q.get("today") or ["0"])[0] in ("1", "true", "yes")
-            code, obj = start_fetch(item["id"], "today" if today_only else "full", force)
+            code, obj = start_fetch(item["id"], "today" if flag(q, "today") else "full",
+                                    flag(q, "force"))
             self._json(code, obj)
             return
         self._send(404, "404：POST 只支持 /api/fetch", "text/plain; charset=utf-8")

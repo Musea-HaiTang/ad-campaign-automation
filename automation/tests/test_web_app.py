@@ -95,6 +95,120 @@ class FetchGateTest(unittest.TestCase):
         self.assertEqual([a["db"]["days"] for a in got["activities"]], [0, 0])   # 空库
 
 
+class FetchAllTest(unittest.TestCase):
+    """一次刷**全部**活动（2026-10-09 用户定）：页面的刷新 / 取数都跑登记的全部活动。
+
+    盯住四件事：当前看的活动排头 / 取数按活动跳过分额已用的 / 全跑过就不起 /
+    批次进度按活动现读 `FETCH`（不另存一份状态）。
+    """
+
+    def setUp(self):
+        TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        self.tmp = TMP_ROOT / ("allfetch_%d_%d" % (os.getpid(), next(_seq)))
+        self.tmp.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, str(self.tmp), True)
+
+        webapp.DB_PATH = str(self.tmp / "投放数据.db")
+        perf_db.connect(webapp.DB_PATH).close()
+        webapp.ACTIVITIES = {"A活动-hang": _item("A活动-hang", self.tmp / "A数据"),
+                             "B活动-hang": _item("B活动-hang", self.tmp / "B数据")}
+        webapp.FETCH = {aid: webapp.new_fetch_state() for aid in webapp.ACTIVITIES}
+        webapp.DEFAULT_ID = "A活动-hang"
+        while not webapp.JOBS.empty():
+            webapp.JOBS.get()
+        webapp.BATCH.update({"mode": None, "at": None, "ids": [], "skipped": []})
+        # 测试里"跑完/在跑"是手写的，收尾必须把 running 放掉——不然会污染后面的用例
+        self.addCleanup(lambda: [st.update({"running": False}) for st in webapp.FETCH.values()])
+        self.addCleanup(webapp.BATCH.update, {"mode": None, "at": None, "ids": [], "skipped": []})
+
+    def _mark_fetched_today(self, aid):
+        d = pathlib.Path(webapp.ACTIVITIES[aid]["data_root"]) / (
+            datetime.date.today().isoformat() + "_0939")
+        d.mkdir(parents=True)
+        (d / "投放数据.csv").write_text("测试用，内容无所谓", encoding="utf-8")
+
+    def test_当前活动排头_其余按登记顺序(self):
+        code, obj = webapp.start_fetch_all("today", current="B活动-hang")
+        self.assertEqual(code, 202)
+        self.assertEqual(obj["activities"], ["B活动-hang", "A活动-hang"])
+        self.assertEqual(obj["mode"], "today")
+        self.assertEqual([webapp.JOBS.get()[0] for _ in range(webapp.JOBS.qsize())],
+                         ["B活动-hang", "A活动-hang"])
+
+    def test_取数时已经取过的活动被跳过(self):
+        self._mark_fetched_today("A活动-hang")
+        code, obj = webapp.start_fetch_all("full", current="A活动-hang")
+        self.assertEqual(code, 202)
+        self.assertEqual(obj["activities"], ["B活动-hang"])          # A 今天取过 → 不重复排队
+        self.assertEqual(obj["skipped"], ["A活动-hang"])
+        self.assertEqual({i["activity"]: i["state"] for i in obj["batch"]["items"]},
+                         {"B活动-hang": "running", "A活动-hang": "skipped"})
+
+    def test_全部活动都取过数就不起(self):
+        self._mark_fetched_today("A活动-hang")
+        self._mark_fetched_today("B活动-hang")
+        code, obj = webapp.start_fetch_all("full", current="A活动-hang")
+        self.assertEqual(code, 409)
+        self.assertTrue(obj["blocked"])
+        self.assertIn("所有活动", obj["error"])
+
+    def test_批量跑着的时候再点被挡(self):
+        webapp.start_fetch_all("today", current="A活动-hang")
+        code, obj = webapp.start_fetch_all("today", current="A活动-hang")
+        self.assertEqual(code, 409)
+        self.assertIn("等这一批跑完", obj["error"])
+        for st in webapp.FETCH.values():            # 两个任务中间那一瞬：没人 running、队列还排着
+            st["running"] = False
+        code, obj = webapp.start_fetch_all("today", current="A活动-hang")
+        self.assertEqual(code, 409)
+        self.assertIn("队列", obj["error"])
+
+    def test_批次进度按活动现读状态(self):
+        webapp.start_fetch_all("today", current="A活动-hang")
+        webapp.FETCH["A活动-hang"].update({"running": False, "ok": True})
+        st = webapp.batch_state()
+        self.assertEqual([i["state"] for i in st["items"]], ["ok", "running"])
+        self.assertEqual((st["okCount"], st["done"], st["total"]), (1, 1, 2))
+        self.assertTrue(st["running"])
+        webapp.FETCH["B活动-hang"].update({"running": False, "ok": False, "error": "登录态过期"})
+        st = webapp.batch_state()
+        self.assertFalse(st["running"])
+        self.assertEqual((st["okCount"], st["errorCount"]), (1, 1))
+        self.assertEqual([i["error"] for i in st["items"] if i["state"] == "error"], ["登录态过期"])
+
+    @staticmethod
+    def _handler(path):
+        """直接调 `Handler` 的方法（不开端口、不起线程）：只验 `?all=1` 这条路走不走通。"""
+        class Fake(object):
+            def __init__(self):
+                self.path = path
+                self.sent = []
+
+            def _json(self, code, obj):
+                self.sent.append((code, obj))
+
+            def _send(self, code, body, ctype=""):
+                self.sent.append((code, body))
+
+        Fake.do_GET = webapp.Handler.do_GET
+        Fake.do_POST = webapp.Handler.do_POST
+        return Fake()
+
+    def test_接口_批次进度走all参数(self):
+        fake = self._handler("/api/fetch/status?all=1")
+        fake.do_GET()
+        code, obj = fake.sent[0]
+        self.assertEqual(code, 200)
+        self.assertIn("batch", obj)                 # 跨活动，不带 ?activity= 也要能问
+
+    def test_接口_all参数下POST跑全部活动(self):
+        fake = self._handler("/api/fetch?all=1&today=1&activity=B%E6%B4%BB%E5%8A%A8-hang")
+        fake.do_POST()
+        code, obj = fake.sent[0]
+        self.assertEqual(code, 202)
+        self.assertEqual(obj["activities"], ["B活动-hang", "A活动-hang"])   # 当前看的排头
+
+
 class AutoRefreshTest(unittest.TestCase):
     """服务内自动刷新（2026-09-28）：每天第一次先「取数」固定昨天，之后按间隔刷今天。
 
@@ -262,6 +376,26 @@ class TodoListTest(unittest.TestCase):
         webapp.TODO_CACHE["at"] = 0.0                               # 过期后重算
         webapp.todo_payload()
         self.assertGreater(len(self.calls), n)
+
+    def test_取数正在跑的时候不吃缓存(self):
+        """取数中途库是"只有一部分活动是新数"的样子 → 不吃也不写缓存（2026-10-09 修）。
+
+        真事：2026-10-09 09:37 自动刷新跑到一半（火山已落库、KIRO 还没），页面那一下问到的是
+        "1 条"、还被缓存 60 秒 —— 表格早换新了，角标还停在 1。
+        """
+        webapp.todo_payload()                                       # 先攒下一份缓存
+        n = len(self.calls)
+        webapp.FETCH["A活动-hang"]["running"] = True
+        self.addCleanup(lambda: webapp.FETCH["A活动-hang"].update({"running": False}))
+        out = webapp.todo_payload()
+        self.assertGreater(len(self.calls), n)                      # 重算了，没吃缓存
+        self.assertEqual(out["count"], 1)
+
+    def test_新数进库后缓存作废(self):
+        webapp.todo_payload()
+        self.assertIsNotNone(webapp.TODO_CACHE["payload"])
+        webapp.invalidate_todo()                                    # 取数线程每跑完一个活动就调它
+        self.assertIsNone(webapp.TODO_CACHE["payload"])
 
 
 if __name__ == "__main__":

@@ -59,7 +59,12 @@ function freshTick(){                            // 服务版：60 秒问一次"
     FRESH_KEY = key;
     FRESH = {lastFetchTime: st.lastFetchTime || "", auto: st.auto || null};
     if(DATA) renderHead();
-    if(changed && !st.running) loadFromServer(state ? currentView() : null);   // 自动刷新跑完 → 顺手更新页面
+    if(changed && !st.running){                // 自动刷新跑完 → 顺手更新页面 **和角标**
+      // 2026-10-09 修：以前只换表格、不重问待复盘清单，角标会停在自动刷新开始前那一刻的数字
+      // （表格里三条"过门槛 · 未达标"，角标却显示 1）。
+      loadFromServer(state ? currentView() : null);
+      loadTodo();
+    }
   }).catch(function(){});
 }
 
@@ -263,6 +268,13 @@ function batchTable(series, bk){
 // ---- 三条文案对比大弹窗（2026-10-08）：**未到门槛看记分卡、过门槛看胜出特写** ----
 // 结构（用户 2026-10-08 定）：标题/摘要在前、指标在下；保留走青、下走红；两条资源时自动两列。
 var MSTYLES = [["auto", "自动"], ["score", "① 记分卡"], ["hero", "② 胜出特写"]];
+function ctrOf(g){ return (g.e || 0) ? (g.c || 0) / g.e : 0; }   // 点击率（桶内比较用）
+function betterOf(g, h){                        // g 比 h 好吗？大卡排序：点击率 → 点击 → 曝光
+  if(!h) return true;
+  if(ctrOf(g) !== ctrOf(h)) return ctrOf(g) > ctrOf(h);
+  if((g.c || 0) !== (h.c || 0)) return (g.c || 0) > (h.c || 0);
+  return (g.e || 0) > (h.e || 0);
+}
 function mctxOf(bk, j){
   var gs = groupsBySlot(j.groups || []);
   var th = (bk.threshold != null) ? bk.threshold : j.threshold;
@@ -273,9 +285,13 @@ function mctxOf(bk, j){
     if(!best || (g.c || 0) > (best.c || 0)) best = g;
   });
   var keep = gs.filter(function(g){ return g.keep; });
+  // 大卡（胜出特写）= **保留名单里点击率最高的那条**（2026-10-09 用户定：大卡本来就该是"胜出"的，
+  // 不能再按槽位取第一条——之前永远是"对照组"占大卡，点击最多的反而排到最后一行）。
+  // 只在**保留**里挑：被"下"的那条放大卡，页面会自己打自己（大卡挂着红标"下"）。
+  var top = keep.reduce(function(acc, g){ return betterOf(g, acc) ? g : acc; }, null);
   var ready = !!th && e >= th;
   return {gs: gs, th: th, e: e, ready: ready, pass: !!j.pass, maxE: maxE, best: best, keep: keep,
-          hero: keep[0] || best || gs[0], bk: bk, j: j,
+          hero: top || best || gs[0], bk: bk, j: j,
           act: th ? (ready
             ? '建议：<b class="actkeep">留 ' + (slotNames(j.keep) || "—") +
               '</b> ｜ <span class="actdrop">下 ' + (slotNames(j.drop) || "—") + '</span>'
@@ -317,7 +333,7 @@ function bodyHero(c){                           // ② 胜出特写：左大卡 
     '<article class="herocard" style="--slot:' + slotOf(hg, c) + '">' +
       '<div class="cmpslot"><span class="slotdot" style="background:' + slotOf(hg, c) + '"></span>' +
         '<b>' + esc(hg.label || "") + '</b>' + bestTag(hg, c) +
-        '<span class="badge keepflag">★ ' + (hg.keep ? '建议保留' : '点击最高') + '</span></div>' +
+        '<span class="badge keepflag">★ ' + (hg.keep ? '优先保留' : '点击最高') + '</span></div>' +
       '<h4 class="herocopy">' + titleOf(hg) + '</h4>' +
       '<p class="herosum">' + sumOf(hg) + '</p>' +
       '<div class="herostats">' +
@@ -565,14 +581,16 @@ function loadFetchState(){
     FRESH = {lastFetchTime: st.lastFetchTime || "", auto: st.auto || null};
     if(DATA) renderHead();
     if(!btn) return;
-    // 一天只取一次（昨天是终值）；别的活动在取数时也点不了——浏览器只有一只，取数是串行的
-    btn.disabled = !!st.running || !!st.todayDone || !!st.busy;
+    // 一天只取一次（昨天是终值）；别的活动在取数时也点不了——浏览器只有一只，取数是串行的。
+    // 2026-10-09 起取数是**一次刷全部活动**，所以禁用看 todayDoneAll（所有活动都取过才算今天取过）
+    btn.disabled = !!st.running || !!st.busy || !!st.todayDoneAll;
     // 按钮只剩图标（2026-09-28 用户定：基本永远"今天已取"，文字占地方）——状态全放悬浮提示
-    btn.title = st.busy ? ("另一个活动正在取数（" + st.busyWith + "），等它跑完再点")
+    var recent = st.lastFetchTime ? (" · 最近取数 " + st.lastFetchTime) : "";
+    btn.title = st.busy ? ("另一个活动正在取数（" + st.busyWith + "），等这一批跑完再点")
               : (st.running ? "取数中…"
-              : (st.todayDone ? ("今天已取数" + (st.lastFetchTime ? "（" + st.lastFetchTime + "）" : ""))
-              : (st.lastFetch ? ("取数（把昨天固定下来）· 最近取数 " + st.lastFetchTime)
-                              : "取数（把昨天的数固定下来）")));
+              : (st.todayDoneAll ? ("今天所有活动都已取数" + (st.lastFetchTime ? "（" + st.lastFetchTime + "）" : ""))
+              : ((st.todayDone ? "取数（本活动今天已取，会把还没取的活动补上）"
+                               : "取数（把昨天的数固定下来）") + recent)));
   }).catch(function(){});
 }
 function statemsg(text, cls){                  // 页头那行只用来报"正在进行 / 完毕"
@@ -584,30 +602,55 @@ function clearStatemsgLater(ms){
   setTimeout(function(){ statemsg(""); }, ms || 4000);
 }
 function pollFetch(keep){
-  fetch("api/fetch/status" + actQuery(), { cache:"no-store" }).then(function(r){ return r.json(); }).then(function(st){
-    if(st.running){
-      statemsg(st.mode === "today" ? "正在刷新…" : "正在取数…");
-      setTimeout(function(){ pollFetch(keep); }, 400);   // 2026-09-24：1.2s → 0.4s，刷新完感知上少等最多 0.8s
+  // 2026-10-09：一次刷**全部活动**（服务端按 `?all=1` 给这一批的进度），所以轮询的是批次，
+  // 不是"当前活动"——页头那行显示"正在刷新 2/3：火山…"，跑完一次性换表 + 刷角标。
+  fetch("api/fetch/status" + actQuery("all=1"), { cache:"no-store" }).then(function(r){ return r.json(); }).then(function(st){
+    // 服务端还是旧版（页面是静态文件、立刻生效；app.py 改了要重启服务）→ 退回"只看当前活动"的老轮询，
+    // 否则这里会把"没有 batch 字段"当成"已跑完"，刷新看起来秒完成、表格其实没换。
+    if(!st.batch){
+      var w0 = (st.mode === "today") ? "刷新" : "取数";
+      if(st.running || st.busy){
+        statemsg(st.running ? ("正在" + w0 + "…") : ("正在取数（" + st.busyWith + "）…"));
+        setTimeout(function(){ pollFetch(keep); }, 400);
+        return;
+      }
+      if($("refresh")) $("refresh").classList.remove("spin");
+      if($("fetchbtn")) $("fetchbtn").classList.remove("spin");
+      if(st.ok){
+        loadFromServer(keep);
+        loadTodo();
+        statemsg(w0 + "完毕！", "ok");
+        clearStatemsgLater();
+      } else if(st.error){
+        statemsg(st.error, "warn");
+      }
+      setTimeout(loadFetchState, 2000);
       return;
     }
-    if(st.busy){                             // 别的活动在跑取数（浏览器只有一只）：这页先等着
-      statemsg("正在取数（" + st.busyWith + "）…");
-      setTimeout(function(){ pollFetch(keep); }, 800);
+    var b = st.batch || {}, items = b.items || [], word = (b.mode === "today") ? "刷新" : "取数";
+    if(b.running){
+      var cur = items.filter(function(i){ return i.state === "running"; })[0] ||
+                items.filter(function(i){ return i.state === "pending"; })[0];
+      statemsg("正在" + word + "（" + Math.min(items.length, (b.done || 0) + 1) + "/" + items.length +
+               (cur ? "：" + cur.label : "") + "）…");
+      setTimeout(function(){ pollFetch(keep); }, 400);   // 2026-09-24：1.2s → 0.4s，刷新完感知上少等最多 0.8s
       return;
     }
     if($("refresh")) $("refresh").classList.remove("spin");
     if($("fetchbtn")) $("fetchbtn").classList.remove("spin");
-    if(st.ok){
-      loadFromServer(keep);                    // 刷新时保住当前选中的时间段/口径
-      if(st.mode === "today"){
-        statemsg("刷新完毕！", "ok");
-      } else {
-        statemsg("取数完毕！", "ok");
-      }
-      loadTodo();                                // 新数进来 → 待复盘角标跟着更新（服务端 60 秒缓存）
+    var bad = items.filter(function(i){ return i.state === "error"; });
+    var okN = items.filter(function(i){ return i.state === "ok"; }).length;
+    var skipN = items.filter(function(i){ return i.state === "skipped"; }).length;
+    loadFromServer(keep);                      // 刷新时保住当前选中的时间段/口径
+    loadTodo();                                // 新数进来 → 待复盘角标跟着更新（服务端已作废那份缓存）
+    if(bad.length){
+      statemsg(word + "完毕：" + okN + " 个成功、" + bad.length + " 个失败（" +
+               bad.map(function(i){ return i.label; }).join("、") + "）：" +
+               (bad[0].error || ""), "warn");
+    } else {
+      statemsg(word + "完毕！" + (items.length > 1 ? ("（" + okN + " 个活动" +
+               (skipN ? "，" + skipN + " 个今天已取过" : "") + "）") : ""), "ok");
       clearStatemsgLater();
-    } else if(st.error){
-      statemsg(st.error, "warn");
     }
     setTimeout(loadFetchState, 2000);
   }).catch(function(){ setTimeout(function(){ pollFetch(keep); }, 1500); });
@@ -624,7 +667,8 @@ function startFetch(todayOnly){
     btn.classList.add("spin");                 // 图标按钮：转起来就行，不写文字（写文字会把图标顶掉）
     statemsg("正在取数…");
   }
-  fetch("api/fetch" + actQuery(todayOnly ? "today=1" : ""), { method:"POST" }).then(function(r){
+  // 一次刷全部活动（2026-10-09 用户定）：`all=1` + 当前活动（服务端让它排头，先跑）
+  fetch("api/fetch" + actQuery("all=1" + (todayOnly ? "&today=1" : "")), { method:"POST" }).then(function(r){
     return r.json().then(function(j){ return { ok:r.ok, j:j }; });
   }).then(function(res){
     if(!res.ok){

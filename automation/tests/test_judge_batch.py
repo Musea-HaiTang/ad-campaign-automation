@@ -94,6 +94,20 @@ class TestJudge(unittest.TestCase):
         self.assertIn("只留上面标「保留」的那 1 条", blob)
         self.assertEqual(need, 0)
 
+    def test_点击并列时留点击率高的那条(self):
+        """用户 2026-10-09 定：点击**打平**时按点击率（再按曝光）排，不再让读数顺序替人做决定。
+
+        真事（火山 A 桶九批）：对照 1,350 曝光 / 1 击 = 0.07%、实验1 1,306 曝光 / 1 击 = 0.08%，
+        点击打平；改之前按读数顺序留下了对照（点击率更低的那条），现在留实验1。
+        """
+        lines, actions, need = self.judge(
+            readings(TASK_A, [("对照-4", 1350, 1), ("实验1-6", 1306, 1), ("实验2-4", 1297, 2)]))
+        blob = "\n".join(actions)
+        self.assertIn("实验2-4 ｜ 1297 曝光 / 2 击 → 保留", blob)      # 点击最多 → 先留
+        self.assertIn("实验1-6 ｜ 1306 曝光 / 1 击 → 保留", blob)      # 并列里点击率高 → 留
+        self.assertIn("对照-4 ｜ 1350 曝光 / 1 击 → **下**", blob)     # 并列里点击率低 → 下
+        self.assertEqual(need, 1)
+
     def test_达标看实际点击率_不是门槛折算的固定击数(self):
         """用户 2026-09-30 定：达标线 = **实际 CTR ≥ 千三**。
 
