@@ -64,6 +64,18 @@ class CheckBatchPlanTest(unittest.TestCase):
             "price": 30, "taskGroup": "T", "deliveryDate": {
                 "start": "2026-10-08", "end": "2026-10-12", "timeStart": 8, "timeEnd": 23}}), [])
 
+    def test_单资源长期单(self):
+        """`taskOrder.abTest: false`（2026-10-12 加）：只挂 1 条资源、没有流量占比。
+
+        后台那一步选「AB测试 = 否」时的形态（真机勘察 `_tmp/_probe_no_ab.py`）——
+        位次 / 权重 / 角色段三条规则都不适用，但「只能 1 条」要卡住。
+        """
+        a = aud(n=1, labels=["对照组"], weights=[None])
+        self.assertTrue(any("AB 组数 1" in e for e in cbp.check_audience(a, CAMP)), "缺省 AB=是 时 1 条应报错")
+        self.assertEqual(cbp.check_audience(a, CAMP, ab_test=False), [])
+        two = aud(n=2)
+        self.assertTrue(any("只能写 1 条" in e for e in cbp.check_audience(two, CAMP, ab_test=False)))
+
     def test_真实批次文件全过(self):
         """仓库里这两批（2026-10-08）当时跑过一次后台，必须是干净的。"""
         import io

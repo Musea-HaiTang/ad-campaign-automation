@@ -28,7 +28,22 @@ web/
 数据到哪天 = 库里最新那行是哪天；取数**默认增量**（最近有数据那天 ~ 今天），随点随新。
 
 ⚠ **浏览器是常驻的**：`web/start.bat` 起服务时就把浏览器开起来（无窗口），「刷新 / 取数」都复用它，
-**关掉服务窗口（或 Ctrl+C）时一起关**——实测强杀服务进程也不留残留的 Edge / node 进程。
+**关掉服务窗口（或 Ctrl+C）时一起关**。
+⚠ **但"强杀"会漏**（2026-10-12 实测两次）：`Stop-Process` 掉 8770 的监听进程时，取数线程来不及
+`BROWSER.close()`，**那只 Edge 会留在后台占着 `.browser-profile`**；下一次起服务就报
+`浏览器：没起来：BrowserType.launch_persistent_context: Target page, context or browser has been closed`
+（页面 200、就是取数全失败）。停服务后顺手确认一下、有就清掉：
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" |
+  Where-Object { $_.CommandLine -like "*browser-profile*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+> 同一根因（`.browser-profile` 上的残留锁）的详细复现与「过期 `lockfile` 也要删」的处置，见
+> [`automation/docs/执行层实测耗时.md`](../automation/docs/执行层实测耗时.md) 的
+> 「2026-10-12 · 大名单核对"卡住"复现：残留浏览器 + 过期 lockfile」——那边是命令行跑名单，
+> 这边是看板服务，症状一样、清法一样。
+
 代价：**一个登录 profile 同时只能被一个进程用**，所以服务开着时别再在命令行跑 `fetch_perf.py`
 或 `wait_login.py`（会报"浏览器起不来"，提示里写了怎么办）。
 
@@ -37,6 +52,7 @@ web/
 ```powershell
 # 1) 停服务：找 8770 的监听进程并结束（关窗口 / Ctrl+C 等价）
 (netstat -ano | Select-String "127.0.0.1:8770" | Select-String LISTENING) -replace '.*\s(\d+)$','$1' | ForEach-Object { Stop-Process -Id $_ -Force }
+# 1b) 确认没有残留 Edge 占着登录 profile（有就按上面那条清掉，否则第 3 步起来的服务取数全失败）
 # 2) 跑命令行脚本（run_ads / run_taskorder / fetch_perf …）
 # 3) 起回来：脱离当前会话起，输出落日志（否则进程会继承调用方的会话句柄，**监听得到却回不了 HTTP**）
 Start-Process -FilePath "D:\Codex_WorkingSpace\ad_management\.venv\Scripts\python.exe" -ArgumentList "-u","app.py" `
@@ -157,6 +173,22 @@ YAML 都不会被登记）；**同一个任务组名出现两份会直接报错*
 | 之后每 30 分钟 | 刷**今天**的实时数（不落流水，跟页面上那个刷新图标干的事一样） | 打开网站就是最新的 |
 | 每个活动轮着来 | 跨活动串行（浏览器只有一只） | 一个登录 profile 同时只能被一个进程用 |
 
+**收尾的活动不进整批**（2026-10-12 用户定）：活动根下有 `已结束.md` 的活动（首例 `activities/火山引擎MediaKit/已结束.md`）
+**整批「刷新 / 取数」一律跳过**（它一旦失败会把整批拖成"0 成功 N 失败"，看不出到底是谁出问题），
+跑完那行会把跳过的活动名写出来（`取数完毕！（1 个活动，跳过：火山引擎MediaKit-hang-5类）`），
+活动切换器上标「已收尾」，页面照旧能看历史。
+**补数窗口 = 收尾日 + 2 天**：标记正文那行 `收尾日：YYYY-MM-DD` 决定窗口（没写 = 按"立即停"处理）——
+窗口内看板仍自动补数（后台数据回传有延迟，收尾那天先取到的是半截值，隔天重取才是终值），
+过了窗口彻底停、连自动刷新也不再跑；「取数」按钮的禁用判据 `todayDoneAll` 也不把**彻底停掉**的活动
+算进来（否则会永远显示"今天还没取"）。
+**要看 / 要补某个收尾活动**：切到它再点「刷新 / 取数」——这时**只跑它自己**（不再扩成整批，
+`pollFetch` 也改走"只看这个活动"的轮询，免得读到上一批留下的旧进度），服务端单活动入口不做任何拦截。
+判定那边同一份标记也让定时巡检跳过它（`automation/docs/巡检与自动复盘.md` §1）。
+
+取数失败那行提示只在**真像登录态问题**（跳登录页 / 未授权 / 401 / 403）时才带
+"登录态过期就去跑 `wait_login.py`"（2026-10-12 修）——原先无条件套这句，把"日期区间算错""DNS 都解析不出来"
+也一起指去重登，纯误导。
+
 页头第二行会写：`数据区间 09-14 ~ 09-28（15 天）｜ 最近取数 09-28 09:50 ｜ 自动刷新 每 30 分钟（上次 14:03）`；
 自动刷新失败会写「上次 14:03 失败」（详细原因在服务窗口里，多半是登录态过期）。页面每 60 秒问一次状态，
 自动刷新跑完会**自动更新页面**（并保留你选的时间段与口径）——2026-10-09 起**顺带重问一次待复盘清单**，
@@ -245,6 +277,14 @@ YAML 都不会被登记）；**同一个任务组名出现两份会直接报错*
 
 ## 常见问题
 
+- **页面整片显示「Failed to fetch」**（2026-10-12 真踩到）：这不是"库里没数据"，是 `/api/perf` **抛异常**了——
+  服务把连接掐掉，浏览器只会给这一句。看 `$env:TEMP\board_service.err.log`（服务是隐藏窗口起的，日志落这两个文件）。
+  那次的原因：批次索引新加的一个字段写成了 `set`，而 `build_payload` 会把**整份** `campaign.load_batches()` 放进 payload
+  （`batches` 那一栏），`json.dumps` 直接 `TypeError: Object of type set is not JSON serializable`。
+  ⛔ **规矩**：凡是会进 payload 的数据（含 `load_batches()` 的输出）**必须是 JSON 可序列化的**——
+  测试 `automation/tests/test_campaign.py::BatchIndexTest::test_批次索引必须能过json` 现在会拦住这类。
+  （⚠ 顺带一条：**8770 别开两个服务**——Windows 允许同端口多实例共存，请求会随机落到其中一个，
+  表现就是时好时坏；`netstat -ano | findstr 8770` 看 LISTENING 有几行。）
 - 页面显示「数据加载失败」：服务没起或端口不对 → 起服务后点右上角「刷新数据」。
 - 数字是旧的：先跑 `fetch_perf.py` 出新快照，再点「刷新数据」（服务不缓存，`Cache-Control: no-store`）。
 - **页面只显示最近几天**：2026-09-20 之前是"最新一份快照即真相"造成的（窄区间取数会把可见区间缩窄）。

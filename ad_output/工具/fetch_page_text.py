@@ -10,12 +10,14 @@
 输出：
     - 原始 HTML 存到 out（默认 `../../automation/_tmp/_page_raw_<时间戳>.html`，也可显式指定）
     - stdout 打印去掉 script/style/标签后的正文（一行一条，适合直接读）
+    - 响应是 gzip 时自动解压（腾讯云文档站直接回 gzip，不解压会存出一份乱码 HTML）
 
 ⚠ 局限：只抓**静态 HTML**。若页面正文是 JS 渲染/接口加载的，这里只能拿到骨架——
    那种情况改用浏览器（Playwright 打开页面后取 innerText）。
 """
 import re
 import sys
+import gzip
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -36,7 +38,10 @@ def use_utf8_stdout():
 def fetch_text(url, out_path=None):
     """抓 url → 返回 (去标签正文, 原始 HTML)。out_path 给了就把原始 HTML 落盘。"""
     req = urllib.request.Request(url, headers={"User-Agent": UA})
-    html = urllib.request.urlopen(req, timeout=40).read().decode("utf-8", "ignore")
+    raw = urllib.request.urlopen(req, timeout=40).read()
+    if raw[:2] == b"\x1f\x8b":  # 腾讯云文档等站直接回 gzip，不解压会存出一份乱码 HTML
+        raw = gzip.decompress(raw)
+    html = raw.decode("utf-8", "ignore")
     if out_path:
         Path(out_path).write_text(html, encoding="utf-8")
     body = re.sub(r"<script.*?</script>|<style.*?</style>|<!--.*?-->", " ", html, flags=re.S | re.I)

@@ -35,6 +35,7 @@
 | `channel` | 渠道（穿梭框），如 `PC-博客-详情页-相关推荐T0` |
 | `channelSizeId` | 该渠道的 尺寸/ID，如 `58`（正常点击渠道即可，58 自带） |
 | `abGroups` | AB 测试三组：`对照组`(34) / `实验组1`(33) / `实验组2`(33)，合计 100。**逐桶优先**：`audiences[].abGroups` 有就用本桶的，没有才用 `taskOrder.abGroups` 兜底（全活动共用一组） |
+| `abTest` | *(可不填，默认 `true`)* **`false` = 单资源长期单**（2026-10-12 加）：点「**AB测试 = 否**」→ 只挂 `abGroups` **第一条**资源 → **不填流量占比**。用途 = 某桶单条资源级已经 ≥ 千三、按 §9.3 停测转长期单（先例 `activities/KIRO鬼点子计划/调整/2026-10-12-D长期单.yaml`）。这时 `resources` 写 `[]`、`abGroups` 只写 1 条 |
 | `price` | 计费价格（CPM）。**必填、由用户当期给**（2026-09-22 起不再固定数值，历史 20 / 30 都不套用） |
 | `deliveryDate` | 投放日期=设置时间：`{mode: set_time, start, end, timeStart, timeEnd}`，如 `2026-09-09`~`2026-09-11`、时段 `8~23`（**起止日 + 时间段需用户提供**） |
 | `distributionList` | *(可不填)* 用户名单名。优先级：`audiences[].distributionList` → `taskOrder.distributionList` → **本桶客群名**（正式跑走这条）。彩排拿后台现成测试名单验流程靠这个。填真名，别带后台显示的「… 用户名」后缀 |
@@ -53,7 +54,8 @@
 | 4 | 任务组 | `input[placeholder='请选择任务组']` | **先搜再选**（337 项），`search_select` |
 | 5 | 任务名称 | `input[placeholder='请输入任务名称']` | `taskName` |
 | 6 | 渠道 | 穿梭框 `.el-transfer` | 搜渠道→勾选→勾「58」→移右（勾后才可移动） |
-| 7 | AB测试=是 | `.el-radio` 是 | 资源三组卡片才出现 |
+| 7 | AB测试 | `.el-radio` **是 / 否** | **是**（默认路径，`abTest` 缺省）→ 走第 8~11 步；**否**（`abTest: false`）→ 走第 7b 步。⚠ 后台**默认就是「否」**，所以两条路都要显式点一次 |
+| 7b | **单资源**（AB=否） | `.resource-row input[placeholder='请输入资源名称搜索']` | 点开→输名(异步加载)→点下拉项→**回读一致**；**没有流量占比**。选完直接接第 12 步 |
 | 8 | AB 对照组/实验组1 | 卡片 `.abtest-resource-item` | 点卡片→弹窗(标题=组名) |
 | 9 | AB 实验组2 | 点资源区「+」`+` | 弹「新增实验组」弹窗 |
 | 10 | AB 选资源 | 弹窗内 `input[placeholder='请输入资源名称搜索']` | 点开→输名(异步加载)→点下拉项 |
@@ -77,6 +79,9 @@
 
 # 只建指定桶（逐桶推进，如先只建 A 桶那一个工单）：加 --only
 .venv\Scripts\python.exe -u automation/scripts/run_taskorder.py --config activities/{活动名}/配置/{品牌}{负责人}.yaml --only A --submit
+
+# 单资源长期单（YAML 里 taskOrder.abTest: false）：同一个命令，脚本自己走「AB测试=否」
+.venv\Scripts\python.exe -u automation/scripts/run_taskorder.py --config activities/KIRO鬼点子计划/调整/2026-10-12-D长期单.yaml --submit
 
 # 断点账本不想要了，从头全跑
 --reset-progress
@@ -126,6 +131,10 @@ B/C/D 三个桶就被 9-14/9-18/9-20 的旧记录挡住了，只有 A/E 跑起�
   `对照组 → 实验组1 → 实验组2`，只能顺序填满；把第二条标成"实验组2"会报 **`实验组1资源ID不能为空`**。
   修法：2 资源桶一律 `对照组 + 实验组1`；如果这条文案是从"实验2"谱系延续的，**按槽位改名**（`…B类 · 实验1-4`），
   并在台账记 lineage（`实验2-2 → 实验1-4`）。⚠ 已经建出来的旧名字资源会变成孤儿（没绑任何工单），要么留着不管、要么在后台手动删。
+- **单资源长期单（`abTest: false`）是另一套控件**（2026-10-12 真机勘察 `_tmp/_probe_no_ab.py`）：
+  后台「AB测试」**默认就是「否」**；选「否」时 `资源信息` 块里**不是**三张 `.abtest-resource-item` 卡片，
+  而是 `.resource-row` 里的**一个必填下拉**（`请输入资源名称搜索`），**且没有流量占比**。
+  所以单资源模式别去找卡片、也别填权重；`check_batch_plan.py` 在这个模式下**不校验权重 / 位次 / 角色段**。
 
 ## 性能（2026-09-22 实测）
 

@@ -39,7 +39,29 @@ def load_thresholds(config):
         raise SystemExit("找不到门槛配置：%s" % path)
     with io.open(path, encoding="utf-8") as f:
         import yaml
-        return yaml.safe_load(f)
+        th = yaml.safe_load(f)
+    _require_every_bucket(th, config)
+    return th
+
+
+def _require_every_bucket(th, config):
+    """这批要判的桶，必须在 `判定门槛.yaml` 里有一行。
+
+    为什么非查不可（2026-10-12 加）：本文件只遍历 `th["buckets"]` 里**列出来的**桶——
+    桶没写进去**不会报错**，但会**静默失效**：既不进判定清单，看板也拿不到门槛，
+    自动巡检永远不为它起复盘对话。多产品活动每加一个新产品就是一个新桶，最容易漏。
+    """
+    cfg = campaign.load(config)
+    ids = [str(a.get("id")) for a in (cfg.get("audiences") or [])]
+    have = set((th.get("buckets") or {}).keys())
+    miss = [i for i in ids if i not in have]
+    if miss:
+        raise SystemExit(
+            "判定门槛.yaml 缺这些桶：%s\n"
+            "  → 给每个桶补一行（起手值 3,000 = 每条约 1,000 曝光；跑 1~2 天后按该工单日均曝光校准，见流程文档 §9.3）：\n"
+            "      %s: {threshold: 3000, resources: %d}\n"
+            "  ⚠ 缺了不会报错，但这个桶**永远不会被判、也不会触发自动复盘**——多产品活动加新产品时最容易漏。"
+            % (", ".join(miss), miss[0], len((cfg.get("audiences") or [{}])[0].get("abGroups") or []) or 3))
 
 
 def _by_bucket(th, rows):

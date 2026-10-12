@@ -41,40 +41,54 @@ def role_of(name):
     return ""
 
 
-def check_audience(a, camp):
-    """一个桶：返回错误列表（空 = 过）。"""
+def check_audience(a, camp, ab_test=True, require_suffix=True):
+    """一个桶：返回错误列表（空 = 过）。
+
+    `ab_test=False`（`taskOrder.abTest: false`，2026-10-12 加）= **单资源长期单**：
+    后台那一步选「AB测试 = 否」，只挂一条资源、**没有流量占比**，所以位次 / 权重 / 角色段三条规则都不适用
+    （勘察见 `automation/_tmp/_probe_no_ab.py`）。这时只要求「正好 1 条、且写了资源名」。
+    """
     errs = []
     bid = a.get("id", "?")
     abg = a.get("abGroups") or []
     if not abg:
         return ["%s 桶：abGroups 为空（工单的 AB 组没写，会回落到全局兜底）" % bid]
 
-    expect_labels = LABELS[:len(abg)]
-    got_labels = [g.get("label") for g in abg]
-    if got_labels != expect_labels:
-        errs.append("%s 桶：AB 行位次必须是 %s（不能跳行），现在是 %s"
-                    % (bid, "/".join(expect_labels), "/".join(str(x) for x in got_labels)))
+    if not ab_test:                                # 单资源长期单：没有占比 / 位次的概念
+        if len(abg) > 1:
+            errs.append("%s 桶：taskOrder.abTest=false（单资源）时 abGroups 只能写 1 条，现在是 %d 条"
+                        % (bid, len(abg)))
+        if not str(abg[0].get("resource") or "").strip():
+            errs.append("%s 桶：单资源那条没写 resource（后台「资源」是必填）" % bid)
+    else:
+        expect_labels = LABELS[:len(abg)]
+        got_labels = [g.get("label") for g in abg]
+        if got_labels != expect_labels:
+            errs.append("%s 桶：AB 行位次必须是 %s（不能跳行），现在是 %s"
+                        % (bid, "/".join(expect_labels), "/".join(str(x) for x in got_labels)))
 
-    want_w = WEIGHTS.get(len(abg))
-    got_w = [g.get("weightPct") for g in abg]
-    if want_w and got_w != want_w:
-        total = sum(x for x in got_w if isinstance(x, int))
-        errs.append("%s 桶：%d 条资源的流量占比必须是 %s（合计 100），现在是 %s（合计 %d）"
-                    % (bid, len(abg), "/".join(map(str, want_w)),
-                       "/".join(str(x) for x in got_w), total))
-    elif not want_w:
-        errs.append("%s 桶：AB 组数 %d 不支持（只能 2 或 3）" % (bid, len(abg)))
+        want_w = WEIGHTS.get(len(abg))
+        got_w = [g.get("weightPct") for g in abg]
+        if want_w and got_w != want_w:
+            total = sum(x for x in got_w if isinstance(x, int))
+            errs.append("%s 桶：%d 条资源的流量占比必须是 %s（合计 100），现在是 %s（合计 %d）"
+                        % (bid, len(abg), "/".join(map(str, want_w)),
+                           "/".join(str(x) for x in got_w), total))
+        elif not want_w:
+            errs.append("%s 桶：AB 组数 %d 不支持（只能 2 或 3）" % (bid, len(abg)))
 
-    for g in abg:                                  # 名字的角色段 ↔ 所在 AB 行
-        want_role = ROLE_OF_LABEL.get(g.get("label"), "")
-        got_role = role_of(g.get("resource"))
-        if want_role and got_role != want_role:
-            errs.append("%s 桶：AB 行「%s」绑的是 `%s`（角色 `%s`）——名字角色段要和槽位一致"
-                        % (bid, g.get("label"), g.get("resource"), got_role or "认不出"))
+        for g in abg:                              # 名字的角色段 ↔ 所在 AB 行
+            want_role = ROLE_OF_LABEL.get(g.get("label"), "")
+            got_role = role_of(g.get("resource"))
+            if want_role and got_role != want_role:
+                errs.append("%s 桶：AB 行「%s」绑的是 `%s`（角色 `%s`）——名字角色段要和槽位一致"
+                            % (bid, g.get("label"), g.get("resource"), got_role or "认不出"))
 
     if not a.get("nameSuffix"):
-        errs.append("%s 桶：缺 nameSuffix（重投批次必须带后缀，否则后台重名建不了）" % bid)
-        return errs
+        # 只有**重投批次**才要求后缀（后台重名建不了）；**首投**的整活动 YAML 本来就是新名字，不该报这条。
+        if require_suffix:
+            errs.append("%s 桶：缺 nameSuffix（重投批次必须带后缀，否则后台重名建不了）" % bid)
+            return errs
 
     want_task = naming.bucket_name(camp, a)        # 名字只认 naming（唯一实现）
     if (a.get("taskName") or "").strip() != want_task:
@@ -124,26 +138,39 @@ def check_task_order(t):
     return errs
 
 
-def check_doc(d):
+def check_doc(d, require_suffix=True):
     camp = d["campaign"]
-    errs = check_task_order(d.get("taskOrder") or {})
+    t = d.get("taskOrder") or {}
+    errs = check_task_order(t)
+    ab_test = t.get("abTest", True)
     for a in d.get("audiences") or []:
-        errs += check_audience(a, camp)
+        errs += check_audience(a, camp, ab_test, require_suffix)
     return errs
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True, help="批次 YAML（activities/{活动}/调整/*.yaml）")
+    ap.add_argument("--config", required=True,
+                    help="批次 YAML（activities/{活动}/调整/*.yaml）或首投的整活动 YAML（配置/*.yaml）")
     args = ap.parse_args()
     with io.open(args.config, encoding="utf-8") as f:
         d = yaml.safe_load(f)
+    # 首投的整活动 YAML 在 配置/ 下、名字本来就是新的 → 不要求 nameSuffix；
+    # 重投批次在 调整/ 下 → 必须带后缀（2026-10-08 踩过的重名问题）。
+    require_suffix = os.path.basename(os.path.dirname(os.path.abspath(args.config))) == "调整"
+    if not require_suffix:
+        print("  （整活动 YAML · 首投：不校验 nameSuffix）")
+    ab_test = (d.get("taskOrder") or {}).get("abTest", True)
     for a in d.get("audiences") or []:
         abg = a.get("abGroups") or []
-        print("  %s 桶：%d 条资源 ｜ 槽位 %s ｜ 占比 %s"
-              % (a.get("id"), len(abg), "/".join(g.get("label", "?") for g in abg),
-                 "/".join(str(g.get("weightPct")) for g in abg)))
-    errs = check_doc(d)
+        if ab_test:
+            print("  %s 桶：%d 条资源 ｜ 槽位 %s ｜ 占比 %s"
+                  % (a.get("id"), len(abg), "/".join(g.get("label", "?") for g in abg),
+                     "/".join(str(g.get("weightPct")) for g in abg)))
+        else:
+            print("  %s 桶：**单资源（AB测试=否）** ｜ 资源 %s"
+                  % (a.get("id"), abg[0].get("resource") if abg else "?"))
+    errs = check_doc(d, require_suffix)
     if errs:
         print("\n✗ 自检不通过（%d 条）：" % len(errs))
         for e in errs:

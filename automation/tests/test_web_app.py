@@ -152,6 +152,75 @@ class FetchAllTest(unittest.TestCase):
         self.assertTrue(obj["blocked"])
         self.assertIn("所有活动", obj["error"])
 
+    def test_收尾的活动不算进今天已取(self):
+        webapp.ACTIVITIES["B活动-hang"]["ended"] = True       # B 收尾 = 不再自动取数
+        self._mark_fetched_today("A活动-hang")
+        self.assertTrue(webapp.today_fetched_all())           # B 不参与，A 取过就算今天取过
+        webapp.ACTIVITIES["B活动-hang"]["ended"] = False
+
+    def _mark_ended(self, aid, day):
+        webapp.ACTIVITIES[aid].update({"ended": True, "endedDay": day})
+
+    def test_收尾的活动不进整批_但可以单独取(self):
+        # 2026-10-12 用户定：整批不再带已收尾的活动（它一失败会把整批拖成"0 成功 N 失败"）
+        self._mark_ended("B活动-hang", "2026-09-01")
+        code, obj = webapp.start_fetch_all("today")
+        self.assertEqual(code, 202)
+        self.assertEqual(obj["activities"], ["A活动-hang"])
+        self.assertEqual(obj["skipped"], ["B活动-hang"])
+        while not webapp.JOBS.empty():                       # 测试里没人真的跑：放掉这一批
+            webapp.JOBS.get()
+        webapp.FETCH["A活动-hang"]["running"] = False
+        code, _ = webapp.start_fetch("B活动-hang", "today")
+        self.assertEqual(code, 202)                          # 单活动入口不拦：那是人明确要的
+
+    def test_补数窗口内的收尾活动也不进整批(self):
+        # 窗口内它照样自动补数（见下一条用例），但**整批**不该带上它——不然又变成"它失败整批跟着难看"
+        webapp.ACTIVITIES["B活动-hang"].update(
+            {"ended": True, "endedDay": datetime.date.today().isoformat()})
+        self.assertFalse(webapp.fetch_stopped(webapp.ACTIVITIES["B活动-hang"]))
+        code, obj = webapp.start_fetch_all("today")
+        self.assertEqual(code, 202)
+        self.assertEqual(obj["activities"], ["A活动-hang"])
+        self.assertEqual(obj["skipped"], ["B活动-hang"])
+
+    def test_全部活动都已收尾就不起(self):
+        self._mark_ended("A活动-hang", "2026-09-01")
+        self._mark_ended("B活动-hang", "2026-09-01")
+        code, obj = webapp.start_fetch_all("today")
+        self.assertEqual(code, 409)
+        self.assertIn("已收尾", obj["error"])
+
+    def test_收尾日之后还用两天自动补数(self):
+        # 补数窗口 N=2：收尾当天 + 之后两天仍算"在跑"（数据回传有延迟），第 3 天才彻底停
+        it = webapp.ACTIVITIES["B活动-hang"]
+        today = datetime.date.today()
+        for gap, live in ((0, True), (2, True), (3, False)):
+            it.update({"ended": True,
+                       "endedDay": (today - datetime.timedelta(days=gap)).isoformat()})
+            self.assertEqual(webapp.fetch_stopped(it), not live, gap)
+            self.assertEqual(webapp.auto_action(it) is not None, live, gap)
+
+    def test_收尾日从已结束标记里读(self):
+        d = self.tmp / "活动"
+        d.mkdir()
+        (d / "已结束.md").write_text(
+            "# x\n\n> 规则：收尾日 + 2 天，本例 2026-10-14 是最后一天。\n\n"
+            "- **收尾日**：2026-10-12（本活动投放 2026-09-14 ~ 2026-10-12）\n",
+            encoding="utf-8")
+        # 别抓正文里顺嘴提到的日期，也别抓成投放起始日——只认「收尾日：YYYY-MM-DD」
+        self.assertEqual(webapp.ended_day(d), "2026-10-12")
+        (d / "已结束.md").write_text("这份标记没写收尾日\n", encoding="utf-8")
+        self.assertIsNone(webapp.ended_day(d))                # 没日期 = 立即停（保守）
+
+    def test_取数失败提示只在登录态问题时提重登(self):
+        # 2026-10-12 修：原来无条件套"登录态过期就去跑 wait_login.py"，把日期/DNS 故障指去重登
+        self.assertIn("wait_login",
+                      webapp.fetch_error(RuntimeError("返回不是 JSON（可能是登录态失效，跳转了登录页）")))
+        self.assertNotIn("wait_login",
+                         webapp.fetch_error(RuntimeError("结束日 2026-10-11 早于起始日 2026-10-12")))
+        self.assertFalse(webapp.today_fetched_all())          # B 又在跑、今天没取 → 不算
+
     def test_批量跑着的时候再点被挡(self):
         webapp.start_fetch_all("today", current="A活动-hang")
         code, obj = webapp.start_fetch_all("today", current="A活动-hang")
@@ -249,6 +318,14 @@ class AutoRefreshTest(unittest.TestCase):
     def test_间隔给0就关掉(self):
         webapp.AUTO["minutes"] = 0
         self.assertIsNone(webapp.auto_action(self.item))
+
+    def test_收尾的活动不自动刷新(self):
+        self.item["ended"] = True
+        self.assertIsNone(webapp.auto_action(self.item))                     # 今天没取过也不跑
+        self._mark_fetched_today()
+        webapp.AUTO["at"][self.item["id"]] = (datetime.datetime.now() -
+                                              datetime.timedelta(minutes=31))
+        self.assertIsNone(webapp.auto_action(self.item))                     # 到点了也不跑
 
 
 class TodoListTest(unittest.TestCase):

@@ -262,11 +262,20 @@ def plan_days(date_from, date_to, last_day, campaign_start, today):
     起点取「库里最近有数据那天」是为了**自己补洞**：那天取的时候它还是半截的今天，
     隔天重取一遍才是终值；中间断过几天也不会漏。库里最后一天已经是今天（被刷新写过）时
     退回昨天，免得起点跑到终点后面。空库（首次）则从活动投放开始日全量回填。
+
+    2026-10-12 修：**活动开投第一天**（起始日 = 今天）也要能取——这时"昨天"还没有，
+    原来的「起始日 ~ 昨天」区间是反的，会抛"日期填反了"（腾讯云产品 10-12 开投当天
+    每 30 分钟自动取数一次、次次失败就是这么来的）。首日就只取当天那一格。
     """
     yesterday = (datetime.date.fromisoformat(today) - datetime.timedelta(days=1)).isoformat()
     if date_from or date_to:
         return (date_from or last_day or campaign_start), (date_to or yesterday), "指定区间"
     if not last_day:
+        if campaign_start > today:                 # 还没开投：别去查一段未来的空区间，说清楚就行
+            raise RuntimeError("活动还没开始投放（起始日 %s，今天 %s）——开投后再取数"
+                               % (campaign_start, today))
+        if campaign_start > yesterday:
+            return campaign_start, campaign_start, "首次回填（开投首日）"
         return campaign_start, yesterday, "首次回填"
     return min(last_day, yesterday), yesterday, "增量"
 

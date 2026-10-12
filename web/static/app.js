@@ -556,7 +556,7 @@ function bootActivities(res){
   if(sel){
     sel.innerHTML = ACTS.map(function(a){
       return '<option value="'+esc(a.id)+'">'+esc(a.label)+
-             ((a.db && a.db.days) ? "" : "（库里还没有数据）")+'</option>';
+             (a.ended ? "（已收尾）" : ((a.db && a.db.days) ? "" : "（库里还没有数据）"))+'</option>';
     }).join("");
     sel.value = AID || "";
     sel.hidden = !ACTS.length;
@@ -601,6 +601,8 @@ function loadFromServer(keep){
   }).then(function(d){ boot(d, keep); }).catch(function(e){
     clearPanels();
     if($("ttl")) $("ttl").textContent = "数据加载失败";
+    // 2026-10-12 修：这个日期标签原来不清，切到"库里还没有数据"的活动时会留着上一个活动的日子
+    if($("snaptag")) $("snaptag").textContent = "数据至 —";
     $("subline").textContent = e.message +
       (/^HTTP /.test(e.message) ? "——确认本地服务在跑（web/app.py，或双击 web/start.bat）" : "");
   });
@@ -643,17 +645,19 @@ function statemsg(text, cls){                  // 页头那行只用来报"正�
 function clearStatemsgLater(ms){
   setTimeout(function(){ statemsg(""); }, ms || 4000);
 }
-function pollFetch(keep){
+function pollFetch(keep, single){
   // 2026-10-09：一次刷**全部活动**（服务端按 `?all=1` 给这一批的进度），所以轮询的是批次，
   // 不是"当前活动"——页头那行显示"正在刷新 2/3：火山…"，跑完一次性换表 + 刷角标。
-  fetch("api/fetch/status" + actQuery("all=1"), { cache:"no-store" }).then(function(r){ return r.json(); }).then(function(st){
+  // `single`（2026-10-12）：收尾的活动只跑它自己，这时没有批次可看——直接看它自己的状态，
+  // 否则会读到**上一次整批**留下的旧 batch，页面立刻报"完毕"，其实还在跑。
+  fetch("api/fetch/status" + actQuery(single ? "" : "all=1"), { cache:"no-store" }).then(function(r){ return r.json(); }).then(function(st){
     // 服务端还是旧版（页面是静态文件、立刻生效；app.py 改了要重启服务）→ 退回"只看当前活动"的老轮询，
     // 否则这里会把"没有 batch 字段"当成"已跑完"，刷新看起来秒完成、表格其实没换。
-    if(!st.batch){
+    if(single || !st.batch){
       var w0 = (st.mode === "today") ? "刷新" : "取数";
       if(st.running || st.busy){
         statemsg(st.running ? ("正在" + w0 + "…") : ("正在取数（" + st.busyWith + "）…"));
-        setTimeout(function(){ pollFetch(keep); }, 400);
+        setTimeout(function(){ pollFetch(keep, single); }, 400);
         return;
       }
       if($("refresh")) $("refresh").classList.remove("spin");
@@ -675,14 +679,14 @@ function pollFetch(keep){
                 items.filter(function(i){ return i.state === "pending"; })[0];
       statemsg("正在" + word + "（" + Math.min(items.length, (b.done || 0) + 1) + "/" + items.length +
                (cur ? "：" + cur.label : "") + "）…");
-      setTimeout(function(){ pollFetch(keep); }, 400);   // 2026-09-24：1.2s → 0.4s，刷新完感知上少等最多 0.8s
+      setTimeout(function(){ pollFetch(keep, single); }, 400);   // 2026-09-24：1.2s → 0.4s，刷新完感知上少等最多 0.8s
       return;
     }
     if($("refresh")) $("refresh").classList.remove("spin");
     if($("fetchbtn")) $("fetchbtn").classList.remove("spin");
     var bad = items.filter(function(i){ return i.state === "error"; });
     var okN = items.filter(function(i){ return i.state === "ok"; }).length;
-    var skipN = items.filter(function(i){ return i.state === "skipped"; }).length;
+    var skipL = items.filter(function(i){ return i.state === "skipped"; });
     loadFromServer(keep);                      // 刷新时保住当前选中的时间段/口径
     loadTodo();                                // 新数进来 → 待复盘角标跟着更新（服务端已作废那份缓存）
     if(bad.length){
@@ -691,11 +695,12 @@ function pollFetch(keep){
                (bad[0].error || ""), "warn");
     } else {
       statemsg(word + "完毕！" + (items.length > 1 ? ("（" + okN + " 个活动" +
-               (skipN ? "，" + skipN + " 个今天已取过" : "") + "）") : ""), "ok");
+               (skipL.length ? "，跳过：" + skipL.map(function(i){ return i.label; }).join("、")
+                             : "") + "）") : ""), "ok");
       clearStatemsgLater();
     }
     setTimeout(loadFetchState, 2000);
-  }).catch(function(){ setTimeout(function(){ pollFetch(keep); }, 1500); });
+  }).catch(function(){ setTimeout(function(){ pollFetch(keep, single); }, 1500); });
 }
 function startFetch(todayOnly){
   var btn = todayOnly ? $("refresh") : $("fetchbtn"), keep = state ? currentView() : null;
@@ -710,16 +715,26 @@ function startFetch(todayOnly){
     statemsg("正在取数…");
   }
   // 一次刷全部活动（2026-10-09 用户定）：`all=1` + 当前活动（服务端让它排头，先跑）
-  fetch("api/fetch" + actQuery("all=1" + (todayOnly ? "&today=1" : "")), { method:"POST" }).then(function(r){
+  // 例外（2026-10-12 用户定）：收尾的活动不再混进整批——人在它的页面上点按钮就是
+  // "明确要它这一次"，所以只跑它自己（不加 all=1，服务端单活动入口不拦）。
+  var cur = null;
+  ACTS.forEach(function(a){ if(a.id === AID) cur = a; });
+  var batch = !(cur && cur.ended);
+  var req = [];
+  if(batch) req.push("all=1");
+  if(todayOnly) req.push("today=1");
+  fetch("api/fetch" + actQuery(req.join("&")), { method:"POST" }).then(function(r){
     return r.json().then(function(j){ return { ok:r.ok, j:j }; });
   }).then(function(res){
     if(!res.ok){
       btn.classList.remove("spin");
-      statemsg((res.j.error || "取数没起来") + "（登录态过期就跑 wait_login.py）", "warn");
+      // 只有真像登录态问题才提 wait_login（2026-10-12）：别的错照原样报，别把人带去重登
+      var m = res.j.error || "取数没起来";
+      statemsg(m + (/登录|未授权|401|403/.test(m) ? "（登录态过期就跑 wait_login.py）" : ""), "warn");
       setTimeout(loadFetchState, 1500);
       return;
     }
-    pollFetch(keep);          // 服务端是"起个后台任务就返回"，所以箭头由 pollFetch 在跑完后停
+    pollFetch(keep, !batch);  // 服务端是"起个后台任务就返回"，所以箭头由 pollFetch 在跑完后停
   }).catch(function(e){
     btn.classList.remove("spin");
     statemsg("请求失败：" + e.message, "warn");

@@ -93,6 +93,44 @@ def enable_ab_test(form):
     ui.log("  AB测试: 是")
 
 
+def disable_ab_test(form):
+    """AB测试 = 否（**单资源长期单**，2026-10-12 按真机勘察加）。
+
+    后台默认就是「否」（探针 `_tmp/_probe_no_ab.py` 实测）：这种状态下 `资源信息` 块里不是三张 AB 卡片，
+    而是一个**必填的单资源下拉** `.resource-row input[placeholder='请输入资源名称搜索']`，**没有流量占比**。
+    这里显式点一次「否」，免得将来后台改了默认值。
+    """
+    item = form.locator(".el-form-item").filter(has_text="AB测试").first
+    expect(item).to_be_visible(timeout=6000)
+    click_radio_in_item(item, "否")
+    ui.log("  AB测试: 否（单资源）")
+
+
+def set_single_resource(s, form, resource_name):
+    """AB测试=否 时的「资源」下拉：搜一条 → 选 → 回读。没有流量占比。"""
+    page = s.page
+    if not resource_name:
+        raise RuntimeError("AB测试=否 但没有资源名（abGroups[0].resource 为空）")
+    row = form.locator(".resource-row").first
+    if not row.count():
+        raise RuntimeError("没找到单资源选择区（.resource-row）")
+    sel = row.locator("input[placeholder='%s']" % ui.PH_RESOURCE_SEARCH).first
+    expect(sel).to_be_visible(timeout=8000)
+    sel.click()
+    page.wait_for_selector(ui.SEL_DROPDOWN, timeout=8000)
+    page.wait_for_timeout(300)          # 同 pick_ab_resource：垫等在等后台的远程过滤
+    try:
+        sel.fill(resource_name)
+    except Exception:
+        sel.press_sequentially(resource_name)
+    page.wait_for_timeout(500)
+    ui.pick_option(s, resource_name)
+    got = ui.read_field(row, ui.PH_RESOURCE_SEARCH)
+    if got.strip() != resource_name.strip():
+        raise RuntimeError("单资源回读不一致：期望 %r 实际 %r" % (resource_name, got))
+    ui.log("  [资源] %s ✓" % resource_name)
+
+
 def pick_ab_resource(s, form, group_label, resource_name, weight):
     """点 AB 组标签（对照组/实验组1/实验组2）→ 打开该组弹窗 → 搜资源(异步加载) → 选 →
     填流量占比 → 确定。"""
@@ -481,6 +519,9 @@ def run_bucket(s, cfg, aud):
     # AB 三组资源：**优先用本桶自己的**（audiences[].abGroups，每桶挂自己那 3 份）；
     # 本桶没写才回落到 taskOrder.abGroups（全活动共用一组资源）。
     groups = aud.get("abGroups") or t.get("abGroups") or []
+    # AB 测试开关（2026-10-12 加）：缺省 true = 老路（三组资源）；false = **单资源长期单**，
+    # 只挂 groups 的第一条、没有流量占比（后台那一步选「AB测试 = 否」）。
+    ab_test = t.get("abTest", True)
     # 用户名单名：**正式跑不用写**——默认用本桶的客群名（＝圈选任务名；「一键创建分发名单」的
     # 产物名与它一致）。audiences[].distributionList / taskOrder.distributionList 写了就用写的值
     # （彩排时拿后台现成的测试名单验流程，就靠这个；逐桶写的优先）。
@@ -515,12 +556,17 @@ def run_bucket(s, cfg, aud):
     # 5) 渠道（穿梭框）
     step("渠道", lambda: ui.transfer(s, form, t["channel"]))
 
-    # 6) AB 测试
-    step("AB测试", lambda: enable_ab_test(form))
-    for g in groups:
-        label = g.get("label")
-        step("AB[%s]" % label,
-             lambda g=g: pick_ab_resource(s, form, g.get("label"), g.get("resource"), g.get("weightPct")))
+    # 6) AB 测试（或：单资源）
+    if ab_test:
+        step("AB测试", lambda: enable_ab_test(form))
+        for g in groups:
+            label = g.get("label")
+            step("AB[%s]" % label,
+                 lambda g=g: pick_ab_resource(s, form, g.get("label"), g.get("resource"), g.get("weightPct")))
+    else:
+        step("AB测试", lambda: disable_ab_test(form))
+        one = (groups[0].get("resource") if groups else "")
+        step("资源", lambda: set_single_resource(s, form, one))
 
     # 7) 投放类型 = CPM
     step("投放类型",

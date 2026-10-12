@@ -185,5 +185,28 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(jb.next_batch("abc"), "?")
 
 
+class RequireEveryBucketTest(unittest.TestCase):
+    """本批的每个桶都必须在 `判定门槛.yaml` 里。
+
+    缺了**不会报错**，但会静默失效：judge 只遍历门槛里列出的桶 → 该桶永远不判、也不触发自动复盘。
+    多产品活动每加一个新产品就是一个新桶，最容易漏（2026-10-12 加这条检查）。
+    """
+
+    CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                       "activities", "火山引擎MediaKit", "配置", "火山引擎MediaKit-hang.yaml")
+
+    def test_桶齐了就不报(self):
+        th = {"buckets": {k: {"threshold": 1, "resources": 3} for k in "ABCDE"}}
+        jb._require_every_bucket(th, self.CFG)          # 不抛就是过
+
+    def test_缺桶当场报错_不许静默不判(self):
+        with self.assertRaises(SystemExit) as cm:
+            jb._require_every_bucket({"buckets": {"A": {}}}, self.CFG)
+        msg = str(cm.exception)
+        self.assertIn("判定门槛.yaml 缺这些桶", msg)
+        self.assertIn("永远不会被判", msg)
+        self.assertIn("{threshold: 3000", msg)          # 报错里直接给出该补的那一行
+
+
 if __name__ == "__main__":
     unittest.main()

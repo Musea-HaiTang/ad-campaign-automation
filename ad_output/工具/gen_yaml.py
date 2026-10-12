@@ -34,6 +34,27 @@ CONTROLS = {
     },
 }
 
+# AB 槽位：role → 后台行名（后台要从对照组往下填满、不能跳行）+ 流量占比（按资源条数，合计必须 100%）
+ROLE_ORDER = [("control", "对照组"), ("experiment1", "实验组1"), ("experiment2", "实验组2")]
+WEIGHT_BY_COUNT = {3: [34, 33, 33], 2: [50, 50]}
+
+
+def derive_ab_groups(resources):
+    """首投：按本桶新建的 `resources` 派生 AB 三组（名字直接取 resources 里的 name，与 naming 同源）。
+
+    为什么要有它（2026-10-12 用户定）：以前 `abGroups[].resource` 是**手写**在活动定义里的，
+    和 `resources`（naming 算出来的名字）是两个出处——改命名规则那天手写的那份没跟着变，
+    于是生成出「新建资源没被任何 AB 行引用」（自检拦住了；没拦住就是工单挂不上资源）。
+    认不出的组合（条数不是 2/3、role 重复）返回空列表，**不猜**，留给桶里手写。
+    """
+    by_role = {r["role"]: r for r in resources}
+    roles = [(role, label) for role, label in ROLE_ORDER if role in by_role]
+    weights = WEIGHT_BY_COUNT.get(len(roles))
+    if not weights or len(roles) != len(resources):
+        return []
+    return [{"label": label, "resource": by_role[role]["name"], "weightPct": w}
+            for (role, label), w in zip(roles, weights)]
+
 
 def build(d):
     camp = d["campaign"]
@@ -65,9 +86,11 @@ def build(d):
             "keywordGroup": {"keywords": b["keywords"]},
             "resources": resources,
         }
-        # 逐桶覆盖项：本桶的 AB 三组资源 / 本桶的用户名单（不写则执行层回落到 taskOrder）
-        if b.get("abGroups"):
-            a["abGroups"] = b["abGroups"]
+        # AB 三组：**首投自动派生**（2026-10-12 用户定）——名字跟 resources 同源，不会再出现"改了命名、
+        # 手写的 abGroups 还是旧名字"。桶里显式写了 abGroups 就用手写的（复盘重投 = 复用老资源、只挂 1~2 条）。
+        abg = b.get("abGroups") or derive_ab_groups(resources)
+        if abg:
+            a["abGroups"] = abg
         if b.get("distributionList"):
             a["distributionList"] = b["distributionList"]
         audiences.append(a)

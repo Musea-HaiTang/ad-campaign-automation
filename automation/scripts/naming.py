@@ -14,6 +14,14 @@
     活动标签 / 物料文件名 = {前缀}-{N}类[投放物料.html]
     重投后缀 = audiences[].nameSuffix 追加在客群名/工单名/资源名末尾（桶名不带，见 name_suffix）
 
+    **产品类桶**（多产品活动，`id` = 产品名而不是单个字母；2026-10-12 用户定）：
+
+    桶名 = 客群名 = 工单名 = {前缀}-{id}     如 腾讯云产品-hang-WorkBuddy企业版
+    资源名 = {前缀}-{id} · {角色中文}        如 腾讯云产品-hang-WorkBuddy企业版 · 对照
+
+    用户原话「不要这个类吧，-后面就接产品名字」。产品名本身已经唯一，所以**不再拼 `类`、也不再拼 ` · {topic}`**
+    （topic 仍写在 YAML 里给物料和后台看，只是不进名字）。单个字母的旧桶走原规则，两边互不影响。
+
 前缀以 `campaign.namePrefix` 为准；没有它才退回 YAML 里手写的 `audiences[].taskName`。
 纯函数，不碰文件、不读 YAML、不 import 别的模块 → 可以直接测（tests/test_naming.py）。
 """
@@ -32,12 +40,20 @@ def require_prefix(campaign):
     return p
 
 
+def is_product_bucket(audience):
+    """桶标识是不是「产品名」而不是老式的单个字母（A/B/C）。"""
+    aid = str(audience.get("id") or "").strip()
+    return bool(aid) and not (len(aid) == 1 and aid.isascii() and aid.isalpha())
+
+
 def bucket_name(campaign, audience):
     """桶名段 `{前缀}-{id}类`；没有前缀时用 YAML 里手写的 `audiences[].taskName`。"""
     p = prefix(campaign)
     if p:
         aid = str(audience.get("id") or "").strip()
-        return ("%s-%s类" % (p, aid)) if aid else p
+        if not aid:
+            return p
+        return ("%s-%s" % (p, aid)) if is_product_bucket(audience) else ("%s-%s类" % (p, aid))
     return (audience.get("taskName") or "").strip().rstrip("-")
 
 
@@ -55,6 +71,8 @@ def audience_task_name(campaign, audience):
     """圈选任务名（= 后台客群名）：`桶名 · {topic}`；没写 topic 就只有桶名。"""
     base = bucket_name(campaign, audience)
     topic = (audience.get("topic") or "").strip()
+    if prefix(campaign) and is_product_bucket(audience):
+        return base + name_suffix(audience)      # 产品类桶：名字就是产品，不再拼 topic
     name = ("%s · %s" % (base, topic)) if (base and topic) else base
     return name + name_suffix(audience)
 

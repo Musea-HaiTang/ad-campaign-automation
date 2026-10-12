@@ -82,6 +82,17 @@ class TestPlanDays(unittest.TestCase):
         self.assertEqual(fp.plan_days("2026-09-20", "2026-09-20", "2026-09-19", "2026-09-14", "2026-09-20"),
                          ("2026-09-20", "2026-09-20", "指定区间"))
 
+    def test_campaign_starting_today_取当天(self):
+        # 2026-10-12 修：**开投第一天**（起始日 = 今天）也要能取——昨天还不存在，
+        # 原来的「起始日 ~ 昨天」是反区间，会抛"日期填反了"（腾讯云产品当天就是）
+        self.assertEqual(fp.plan_days(None, None, None, "2026-09-20", "2026-09-20"),
+                         ("2026-09-20", "2026-09-20", "首次回填（开投首日）"))
+
+    def test_future_campaign_start_says_not_started(self):
+        # 还没开投 → 说清楚"还没开始"，别去查一段未来的空区间、也别报"日期填反了"
+        with self.assertRaises(RuntimeError):
+            fp.plan_days(None, None, None, "2026-09-25", "2026-09-20")
+
 
 class TestWriteCsv(unittest.TestCase):
     def test_roundtrip_with_bom(self):

@@ -32,8 +32,10 @@ KEYWORD_GROUP = {"keywords"}
 # highlight = 飘红词（2026-09-24 加）：**可选**，留空 = 不飘红；填了就选「是否飘红=是」并写入该词。
 # 后台机制（用户实测）：只能填一个表达，正则最长匹配，标题 + 摘要里所有出现处都会标红。
 RESOURCE = {"role", "name", "title", "summary", "link", "highlight"}
+# abTest（2026-10-12 加）：true / 缺省 = 老路（AB测试=是，逐组挂资源）；
+#   false = **单资源长期单**（AB测试=否，只挂 abGroups 的第一条、没有流量占比）——D 桶转长期单用。
 TASK_ORDER = {"businessLine", "taskGroup", "taskName", "channel", "channelSizeId", "abGroups",
-              "price", "deliveryDate", "distributionList", "exposureCaps"}
+              "abTest", "price", "deliveryDate", "distributionList", "exposureCaps"}
 DELIVERY_DATE = {"mode", "start", "end", "timeStart", "timeEnd"}
 AB_GROUP = {"label", "resource", "weightPct"}
 
@@ -146,6 +148,8 @@ def validate(data):
     e.keys("taskOrder", t, TASK_ORDER)
     for k in ("businessLine", "taskGroup", "channel", "price"):
         e.need("taskOrder", t, k)
+    if "abTest" in t and not isinstance(t["abTest"], bool):
+        e.add("taskOrder.abTest 必须是 true / false（false = 单资源、不跑 AB）")
     dd = t.get("deliveryDate")
     e.keys("taskOrder.deliveryDate", dd, DELIVERY_DATE)
     for k in ("start", "end"):     # 日期不猜：写死默认日期最容易跑错
@@ -293,6 +297,9 @@ def load_batches(config, log=None):
                                    "highlight": r.get("highlight") or "",
                                    "bucket": str(a["id"]), "role": r.get("role") or "",
                                    "batch": label}
+        # 全局兜底的 AB 组（`taskOrder.abGroups`）——和 `run_taskorder` 的取法**一模一样**：
+        # 桶自己没写 abGroups 时用它。下面判"这批会给哪些桶建工单"必须跟着同一个规则走。
+        top_groups = (c.get("taskOrder") or {}).get("abGroups")
         out.append({"id": bid, "label": label,
                     "suffix": next((naming.name_suffix(a) for a in c["audiences"]
                                     if naming.name_suffix(a)), ""),
@@ -300,6 +307,13 @@ def load_batches(config, log=None):
                     "yaml": os.path.relpath(p, root).replace("\\", "/"),
                     "orders": {str(a["id"]): naming.order_task_name(camp, a)
                                for a in c["audiences"]},
+                    # 这一个批次**会给哪些桶建工单**——`bucket_current()` 要用：判据 = 这个桶有资源可挂
+                    # （自己写的 abGroups，或回落到 taskOrder.abGroups），跟 `run_taskorder` 取 groups 的规则一致。
+                    # 复用老资源的"长期单"批次 `resources` 是空的，但 abGroups 有，照样算这个桶的当前批次。
+                    # ⚠ 必须是 **list 不能是 set**：整份批次索引会进看板 payload（`perf_payload` 的 `batches`），
+                    #   set 过不了 `json.dumps`（2026-10-12 真踩到：页面 "Failed to fetch"）。
+                    "abBuckets": sorted({str(a["id"]) for a in c["audiences"]
+                                         if a.get("abGroups") or top_groups}),
                     "copy": copy})
     return sorted(out, key=lambda b: (b["start"], b["id"]))
 
@@ -316,8 +330,11 @@ def copy_index(batches):
 def bucket_current(batches):
     """{桶 id: 该桶**最后一次建批**的批次 id}——2026-10-08 用户定，桶独立的核心口径。
 
-    只写了 audience、没挂资源的批次**不算**（如七批的 E 桶只是占位）；
-    一个桶在任何批次里都没挂过资源时，回落到"最后一个提到它的批次"。
+    一个批次对这个桶**有交代**才算：**要么新建了资源**（`copy` 里有），**要么写了 `abGroups`**
+    （= 这个批次会给它建工单）——**2026-10-12 补**：复用老资源的"长期单"批次 `resources: []`，
+    但 `abGroups` 有，所以照样算（不然 D 的当前批次会一直停在下线了的老工单上）。
+    两者都没有的**纯占位**批次不算（如七批的 E 桶只是占位）；
+    一个桶在任何批次里都没被交代过时，回落到"最后一个提到它的批次"。
     看板（`perf_payload.bucket_view`）和巡检（`judge_batch`）都用这一份，别各写一遍。
     """
     has_res = {}
@@ -327,7 +344,7 @@ def bucket_current(batches):
             bid = str(item.get("bucket") or "")
             if bid:
                 got.add(bid)
-        has_res[b["id"]] = got
+        has_res[b["id"]] = got | set(b.get("abBuckets") or ())
     cur, last_any = {}, {}
     for b in batches:
         for bid in (b.get("orders") or {}):
@@ -340,23 +357,16 @@ def bucket_current(batches):
 
 
 def current_batch(batches, config):
-    """当前批次 = `配置/判定门槛.yaml` 的 `batch` 后缀匹配到的那批；没有门槛文件就取最后一批。
+    """当前批次 = **活动最新的一批**（`load_batches` 已按「投放开始日 + id」排序，取最后一个）。
 
-    KIRO 这类**还没定门槛**的活动走回落：页面照样能按批次看数据，只是不显示达标。
+    ⚠ **2026-10-12 改**：以前读 `配置/判定门槛.yaml` 的 `batch` 字段，那个字段已经删了——
+    它是"**桶独立**"（2026-10-08）之前留下的**全局批次号**，跟现在的口径冲突：现在**每个桶**看
+    **自己最后一次建批**（规则在 `bucket_current()`，看板与巡检都用它）。`config` 参数保留只为兼容调用方。
+
+    这个全局值现在只喂看板的历史口径（`perf_payload` 的 `currentBatch`）。
     """
     if not batches:
         return None
-    want = ""
-    try:
-        path = os.path.join(activity_dir(config), "配置", "判定门槛.yaml")
-        with open(path, encoding="utf-8") as f:
-            want = str((yaml.safe_load(f) or {}).get("batch") or "").strip()
-    except Exception:
-        want = ""
-    if want:
-        for b in batches:
-            if b["suffix"] == want or b["id"].endswith(want):
-                return b["id"]
     return batches[-1]["id"]
 
 

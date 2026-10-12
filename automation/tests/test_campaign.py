@@ -304,6 +304,35 @@ class BatchIndexTest(unittest.TestCase):
                          ("标题-6", "摘要-6", "飘红词"))
         self.assertEqual(one["batch"], "09-24 六批")
 
+    def test_复用老资源的长期单也算桶的当前批次(self):
+        """`resources: []` 但有 `abGroups`（= 会给这个桶建工单）→ 算（2026-10-12 长期单）。"""
+        d = self._batch("", "2026-10-12")
+        a = d["audiences"][0]
+        a["nameSuffix"] = "-长投"
+        a["resources"] = []
+        a["abGroups"] = [{"label": "对照组", "resource": "测试hang-A类 · 对照-5"}]
+        self._write(self.act / "调整" / "2026-10-12-A长期单.yaml", d)
+        bs = campaign.load_batches(str(self.cfg))
+        self.assertEqual(campaign.bucket_current(bs)["A"], "2026-10-12-A长期单")
+
+    def test_靠全局兜底abGroups的批次也算交代(self):
+        """桶自己没写 abGroups、回落到 `taskOrder.abGroups`（run_taskorder 的取法）也要算。"""
+        d = self._batch("", "2026-10-12")
+        d["audiences"][0]["resources"] = []
+        d["audiences"][0].pop("abGroups", None)
+        self._write(self.act / "调整" / "2026-10-12-A兜底.yaml", d)
+        bs = campaign.load_batches(str(self.cfg))
+        self.assertEqual(campaign.bucket_current(bs)["A"], "2026-10-12-A兜底")
+
+    def test_批次索引必须能过json(self):
+        """整份批次索引会进看板 payload（`perf_payload` 的 `batches`），字段必须 JSON 能序列化。
+
+        2026-10-12 真踩到：`abBuckets` 一开始写成了 `set` → `/api/perf` 抛
+        `TypeError: Object of type set is not JSON serializable` → 页面显示 "Failed to fetch"。
+        """
+        import json
+        json.dumps(campaign.load_batches(str(self.cfg)), ensure_ascii=False)
+
     def test_文案索引跨批次合并_同名取最早那批(self):
         idx = campaign.copy_index(campaign.load_batches(str(self.cfg)))
         self.assertEqual(idx["测试hang-A类 · 对照"]["batch"], "首批")   # 「对照」是首批写的那条
@@ -314,11 +343,15 @@ class BatchIndexTest(unittest.TestCase):
         self.assertEqual(len(got), 3)
         self.assertTrue(any("活动定义.yaml" in s for s in lines), lines)
 
-    def test_当前批次看判定门槛_没有就取最后一批(self):
+    def test_当前批次取活动最新一批_不看判定门槛的batch字段(self):
+        """2026-10-12：判定门槛里的 `batch` 已删（桶独立之后一个全局批次号没意义）。
+
+        故意往门槛文件里塞一个 `batch: -6`——它必须被**忽略**，结果永远是活动最新那批。
+        """
         p = self.act / "配置" / "判定门槛.yaml"
         p.write_text(yaml.safe_dump({"batch": "-6", "buckets": {}}), encoding="utf-8")
         batches = campaign.load_batches(str(self.cfg))
-        self.assertEqual(campaign.current_batch(batches, str(self.cfg)), "2026-09-24-六批")
+        self.assertEqual(campaign.current_batch(batches, str(self.cfg)), "2026-09-29-七批")
         p.unlink()
         self.assertEqual(campaign.current_batch(batches, str(self.cfg)), "2026-09-29-七批")
 
@@ -440,6 +473,20 @@ class AfterActionsTest(unittest.TestCase):
     def test_文件坏了当成没有_不炸页面(self):
         self.human.write_text("batches: {A: [", encoding="utf-8")
         self.assertEqual(campaign.load_after_actions(str(self.cfg)), {})
+
+
+class BucketCurrentTest(unittest.TestCase):
+    """`bucket_current()`：桶的"当前批次"怎么定（2026-10-08 桶独立；2026-10-12 补长期单）。"""
+
+    def test_长期单批次算_纯占位不算(self):
+        b1 = {"id": "b1", "orders": {"D": "x-1"}, "copy": {"r-1": {"bucket": "D"}}}   # 新建了资源
+        b2 = {"id": "b2", "orders": {"D": "x-长投"}, "copy": {}, "abBuckets": {"D"}}   # 复用老资源的长期单
+        b3 = {"id": "b3", "orders": {"D": "x-占位"}, "copy": {}}                      # 纯占位（既没资源也没 abGroups）
+        self.assertEqual(campaign.bucket_current([b1, b2, b3]), {"D": "b2"})
+
+    def test_谁都没交代时回落到最后一个提到的批次(self):
+        b1 = {"id": "b1", "orders": {"A": "x"}, "copy": {}}
+        self.assertEqual(campaign.bucket_current([b1]), {"A": "b1"})
 
 
 if __name__ == "__main__":

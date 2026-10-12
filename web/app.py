@@ -64,6 +64,7 @@ import collections
 import datetime
 import json
 import queue
+import re
 import sys
 import threading
 import time
@@ -103,6 +104,18 @@ BROWSER = None              # 常驻浏览器；**只有取数线程碰它**（p
 #   复盘看到的昨天曝光会偏低。串行仍由取数线程保证（浏览器只有一只）。
 AUTO = {"minutes": 30, "at": {}}    # minutes=0 关掉；at[活动] = 上次自动跑的时刻
 AUTO_STEP = 30                      # 计时线程每 30 秒醒一次看该不该跑（不值当为它精算）
+
+# 「活动收尾」标记（2026-10-12 用户定）：活动根下有 `已结束.md` 的活动**不再参加整批刷新**——
+#   活动投完了、判定也停了（巡检那边同一条标记），登记表里照常留着（页面能看历史）；
+#   要看 / 要补就切到它单独点「取数」（那是人明确要的）。
+#   补数窗口（同日用户定 N=2）：收尾日之后**再自动补 2 天**——后台数据回传有延迟，收尾那行
+#   当天取到的是半截的，隔天重取才是终值。窗口内仍算"在跑"（自动刷新照跑、角标照算），
+#   窗口外才彻底停。
+ENDED_MARKER = "已结束.md"
+# 只认「收尾日：2026-10-12」这种**标签紧跟日期**的写法：正文里顺嘴提到的
+# 「收尾日 + 2 天，本例 2026-10-14」不能被抓成收尾日（那会把窗口整体往后挪）。
+ENDED_DAY_RE = re.compile(r"收尾日\*{0,2}\s*[：: ]\s*(\d{4}-\d{2}-\d{2})")
+ENDED_GRACE_DAYS = 2
 
 # /api/todo（跨活动的「到门槛 · 没复盘」清单）的结果缓存：弹窗可能连点，
 # 而每算一次要把**每个活动**的 payload 都装配一遍。60 秒足够新，坏处是刚取完数
@@ -207,9 +220,51 @@ def fetch_state(item):
             "todayDoneAll": bool(ACTIVITIES) and today_fetched_all()}
 
 
+def ended_day(activity_dir):
+    """`已结束.md` 里那行「收尾日：YYYY-MM-DD」的日子。
+
+    没有这个日期（老标记 / 手写漏了）→ `None` = 不补数、立即停：宁可不动它，
+    也别一直去碰一个已经收尾的活动。
+    """
+    try:
+        text = (Path(activity_dir) / ENDED_MARKER).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        m = ENDED_DAY_RE.search(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def ended_until(item):
+    """补数窗口的最后一天（收尾日 + 2 天）；标记里没写收尾日 → `None`。"""
+    try:
+        deadline = (datetime.date.fromisoformat(item.get("endedDay") or "")
+                    + datetime.timedelta(days=ENDED_GRACE_DAYS))
+    except ValueError:
+        return None
+    return deadline.isoformat()
+
+
+def fetch_stopped(item):
+    """这个活动现在是否**彻底不用取数**了（已收尾 且 过了「收尾日 + 2 天」补数窗口）。
+
+    窗口内仍当"在跑"：后台数据回传有延迟，收尾那天取的数是半截的，隔 1~2 天重取才是终值。
+    """
+    if not item.get("ended"):
+        return False
+    until = ended_until(item)
+    return True if until is None else datetime.date.today().isoformat() > until
+
+
 def today_fetched_all():
-    """所有登记的活动今天都取过数没（配额仍是**按活动**各算一份，这里只是取交集）。"""
-    return all(today_fetched(it) for it in ACTIVITIES.values())
+    """所有**还在跑**的活动今天都取过数没（配额仍是**按活动**各算一份，这里只是取交集）。
+
+    彻底停掉的活动（收尾 + 过了补数窗口）不参与：它不再自动取数，算上它会永远显示"今天还没取"。
+    """
+    live = [it for it in ACTIVITIES.values() if not fetch_stopped(it)]
+    return all(today_fetched(it) for it in live)
 
 
 def invalidate_todo():
@@ -229,7 +284,8 @@ def activities_payload():
     """活动登记表（页面切换器用）；顺序 = 登记顺序 = 配置路径排序，稳定不变。"""
     return {"default": DEFAULT_ID,
             "activities": [{"id": it["id"], "label": it["label"], "dir": it["activity_dir"],
-                            "cfgPath": it["cfg_path"], "db": db_state(it)}
+                            "cfgPath": it["cfg_path"], "db": db_state(it),
+                            "ended": bool(it.get("ended"))}
                            for it in ACTIVITIES.values()]}
 
 
@@ -280,9 +336,11 @@ def auto_action(item, now=None):
     - **今天没取过数** → 先跑一次「取数」：默认区间补到昨天，把昨天的终值固定下来（一天一次）；
     - 之后按 `AUTO["minutes"]` 的间隔刷「今天」的实时数（随时可点的那种，不落流水）；
     - 到没到点看 `AUTO["at"]`（**本活动上次自动跑的时刻**）——手动点过不该让自动刷新停摆；
+    - **活动收尾**（根下有 `已结束.md`）→ 只在「收尾日 + 2 天」补数窗口内继续自动补，
+      过了窗口不再自动刷新（2026-10-12）；
     - `AUTO["minutes"] = 0` = 关掉。
     """
-    if not AUTO["minutes"]:
+    if not AUTO["minutes"] or fetch_stopped(item):
         return None
     if not today_fetched(item):
         return "full"
@@ -328,6 +386,19 @@ def fetch_note(aid):
     return note
 
 
+def fetch_error(e):
+    """取数失败给人看的那句话。
+
+    只有**真像登录态问题**（跳了登录页 / 未授权 / 401 / 403）才提 `wait_login.py`。
+    2026-10-12 修：原来无条件套这句提示，把"日期区间算错""DNS 都解析不出来"也一起
+    指去重登，纯属误导——一次故障最贵的成本就是把人带去查错的地方。
+    """
+    msg = str(e)
+    if re.search(r"登录|未授权|unauthor|40[13]", msg, re.I):
+        return "%s（登录态过期就去跑 automation/scripts/wait_login.py）" % msg
+    return msg
+
+
 def _fetch_job(item, mode):
     """真正跑一次取数：`today`＝只查今天（不落流水）/ `full`＝默认区间补到昨天（落流水）。"""
     args = (item["cfg"], str(item["cfg_path"]), str(DB_PATH))
@@ -365,7 +436,7 @@ def fetch_worker():
             st["snapshot"] = last_fetch(item)
         except Exception as e:
             st["ok"] = False
-            st["error"] = "%s（登录态过期就去跑 automation/scripts/wait_login.py）" % e
+            st["error"] = fetch_error(e)
             BROWSER.close()                    # 出过错的浏览器不留：下一次重开一只
             traceback.print_exc()              # 详细堆栈打到服务窗口，方便回头查
         finally:
@@ -464,6 +535,9 @@ def start_fetch_all(mode="today", current=None, force=False, by="manual"):
 
     `full`（取数）仍按活动各算「一天一次」的配额：已经取过的**跳过、并在结果里说明**，
     不整批报错（自动刷新每天早上已经把 full 跑过一遍，手动再点通常就是"只剩某个活动没取"）。
+    **已收尾的活动一律跳过**（2026-10-12 用户定）：活动投完了就没必要再整批带上它——
+    它一失败还会把整批拖成"0 成功 N 失败"，看不出到底是谁出问题。要补它得切到那个活动
+    单独点「取数」（单活动入口不拦，那是人明确要的）。
     """
     busy = busy_reason()
     if busy:
@@ -475,6 +549,10 @@ def start_fetch_all(mode="today", current=None, force=False, by="manual"):
     run, skipped = [], []
     for aid in ids:
         item = ACTIVITIES[aid]
+        if item.get("ended"):               # 收尾了就整批不带它——补数窗口只管自动刷新那一趟
+            skipped.append({"activity": aid,
+                            "note": "已收尾，不再整批取数——要补就切到它单独点「取数」"})
+            continue
         if mode == "full" and not force:
             done = today_fetched(item)
             if done:
@@ -482,6 +560,10 @@ def start_fetch_all(mode="today", current=None, force=False, by="manual"):
                 continue
         run.append(aid)
     if not run:
+        if skipped and all(s["note"].startswith("已收尾") for s in skipped):
+            return 409, {"error": "登记的活动都已收尾，没有要取数的"
+                                  "——要补历史数据请切到那个活动单独点「取数」",
+                         "blocked": True, "batch": batch_state()}
         return 409, {"error": "所有活动今天都取过数了——昨天不会再变；今天的实时数请点「刷新」",
                      "blocked": True, "batch": batch_state()}
     BATCH.update({"mode": mode, "at": datetime.datetime.now().strftime("%H:%M:%S"),
@@ -623,6 +705,8 @@ def main():
     for it in found:
         d = Path(it["activity_dir"]) / "数据"
         it["data_root"] = str(d) if d.is_dir() else None
+        it["ended"] = (Path(it["activity_dir"]) / ENDED_MARKER).is_file()
+        it["endedDay"] = ended_day(it["activity_dir"]) if it["ended"] else None
         ACTIVITIES[it["id"]] = it
         FETCH[it["id"]] = new_fetch_state()
     # 默认活动优先挑「库里有数据的那个」：新活动刚建、还没取过数时，一打开就是个空页面
@@ -632,9 +716,15 @@ def main():
     print("  台账：%s" % DB_PATH, flush=True)
     for it in found:
         st = db_state(it)
-        print("  活动：%s（%s）—— 库内 %d 天，%s ~ %s%s"
+        if not it.get("ended"):
+            tail = ""
+        elif fetch_stopped(it):
+            tail = "（已收尾：不再自动取数）"
+        else:
+            tail = "（已收尾：自动补数到 %s）" % ended_until(it)
+        print("  活动：%s（%s）—— 库内 %d 天，%s ~ %s%s%s"
               % (it["label"], it["id"], st["days"], st["first"] or "—", st["last"] or "—",
-                 "（默认）" if it["id"] == DEFAULT_ID else ""), flush=True)
+                 "（默认）" if it["id"] == DEFAULT_ID else "", tail), flush=True)
     if skipped:                             # 一行说完：别把 6 行绝对路径糊在标题前面
         names = sorted({Path(s[3:].split("：", 1)[0].strip()).name
                         for s in skipped if s.startswith("跳过 ")})
