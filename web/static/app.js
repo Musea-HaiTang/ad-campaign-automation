@@ -106,12 +106,33 @@ function topicOf(j){                            // 工单名里的受众人群�
   var parts = String(j.task).split(" · ");
   return parts.length > 1 ? parts[1].replace(/-\d+$/, "") : "";
 }
+// 桶的显示（2026-10-12 用户定：产品桶"名字就写产品名"）：判据与 naming.is_product_bucket 一致
+//   —— id 不是单个字母 = 产品桶（WorkBuddy企业版 / TokenHub / 智能体开发平台）。
+//   ① 那个 18px 的圆点原来是塞**整个 id** 的，字母桶（A/B/C）刚好一个字母，产品桶就直接糊成一团
+//      （看着像个错图标）→ 改成取一个字：有英文用首字母、全中文用首字。
+//   ② 桶列原来写的是 topic（"WorkBuddy 企业版（腾讯企业智能体）"这种长句）→ 产品桶只留产品名，
+//      括号里的定位说明挪到悬停 title。字母桶的 topic（"A类 · 创意设计"）原样不动。
+function isProductBucket(bk){
+  return !/^[A-Za-z]$/.test(String((bk && bk.id) || ""));
+}
+function dotText(bk){
+  var s = String((bk && bk.id) || "");
+  if(!isProductBucket(bk)) return s;
+  var m = s.match(/[A-Za-z]/);
+  return m ? m[0].toUpperCase() : (s.charAt(0) || "?");
+}
+function bucketLabel(bk){
+  var t = (bk && bk.topic) || ("桶 " + ((bk && bk.id) || ""));
+  if(!isProductBucket(bk)) return t;
+  return t.replace(/（[^）]*）\s*$/, "").trim() || t;
+}
 function renderBuckets(){                      // 主表：一行 = 一个桶**最新那个任务**（各桶批次可以不同）
   var box = $("buckets");
   if(!box) return;
   var hasTh = !!DATA.thresholds && Object.keys(DATA.thresholds).length > 0;
-  var h = '<table><colgroup><col style="width:17%"><col style="width:22%"><col style="width:10%">' +
-          '<col style="width:11%"><col style="width:12%"><col style="width:28%"></colgroup>' +
+  // 桶列 17% → 20%（2026-10-12）：产品桶的桶名比字母桶长，17% 会折成两行；文案列让 3%
+  var h = '<table><colgroup><col style="width:20%"><col style="width:22%"><col style="width:10%">' +
+          '<col style="width:11%"><col style="width:12%"><col style="width:25%"></colgroup>' +
           '<thead><tr><th>桶</th><th class="c">' + (hasTh ? "曝光 / 门槛" : "曝光") +
           '</th><th class="n">点击</th><th class="n">点击率</th><th>判定</th>' +
           '<th>文案 / 动作</th></tr></thead><tbody>';
@@ -141,8 +162,8 @@ function renderBuckets(){                      // 主表：一行 = 一个桶**�
       act = '<span class="badge dim">建议动作</span> ' + esc(j.conclusion || "继续观察");
     }
     h += '<tr class="mainrow" data-cmp="' + bk.id + '|' + esc(j.batch) + '" title="看三条文案的对比">' +
-         '<td><span class="mkdot" style="background:' + bk.color + '">' + bk.id + '</span> ' +
-           esc(bk.topic || ("桶 " + bk.id)) + '</td>' +
+         '<td><span class="mkdot" style="background:' + bk.color + '">' + esc(dotText(bk)) + '</span> ' +
+           '<span title="' + esc(bk.topic || "") + '">' + esc(bucketLabel(bk)) + '</span></td>' +
          '<td class="c" style="white-space:nowrap">' +
            (th ? '<span class="barwrap" style="width:100px"><span class="bar" style="width:' +
              p.toFixed(1) + '%;background:' + bk.color + '"></span></span> <span class="num">' + fmt(e) +
@@ -407,8 +428,8 @@ function renderModal(){
          : (!j.task ? '<span class="badge dim">待起投</span>'
          : (c.pass ? '<span class="badge ok">达标</span>'
          : (c.ready ? '<span class="badge warn">过门槛 · 未达标</span>' : '<span class="badge dim">未到门槛</span>')));
-  $("mtitle").innerHTML = '<span class="mkdot" style="background:' + bk.color + '">' + bk.id + '</span>' +
-    esc(bk.topic || ("桶 " + bk.id)) +
+  $("mtitle").innerHTML = '<span class="mkdot" style="background:' + bk.color + '">' + esc(dotText(bk)) + '</span>' +
+    esc(bucketLabel(bk)) +
     '<span class="cmpchip">' + esc(j.label || "") + ' · ' + esc(j.start || "") + ' 起投</span>' + st +
     '<span class="cmpstyles">' + MSTYLES.map(function(m){
       return '<button data-mstyle="' + m[0] + '"' + (state.mstyle === m[0] ? ' class="on"' : '') + '>' + m[1] + '</button>';
