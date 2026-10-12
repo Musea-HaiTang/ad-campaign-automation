@@ -47,6 +47,16 @@ Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" |
 代价：**一个登录 profile 同时只能被一个进程用**，所以服务开着时别再在命令行跑 `fetch_perf.py`
 或 `wait_login.py`（会报"浏览器起不来"，提示里写了怎么办）。
 
+⚠ **别起第二个看板**（2026-10-12 踩到，症状极具迷惑性）：Windows 上 `http.server` 默认
+`allow_reuse_address = 1`（等价于 SO_REUSEADDR），**第二个 `app.py` 照样能绑上 8770、不报"端口占用"**，
+于是两个实例一起去抢同一个 `.browser-profile`：抢到锁的那个一切正常，另一个**每次取数都报
+"浏览器起不来 / Target page, context or browser has been closed"**，而页面请求又在两个实例之间随机落
+——看着就像"时好时坏"。当时真身 = 17:07 我起的隐藏实例（浏览器早死、次次失败）+ 17:47 双击 `start.bat`
+起的实例（浏览器活着、占着锁）。
+**已修**：`web/app.py` 的 `BoardServer.allow_reuse_address` 在 Windows 下关掉，并且**端口先绑、再起
+浏览器**——绑不上就打一句人话退出（不会再起第二只浏览器去抢 profile）。
+自检就一句话：`netstat -ano | findstr :8770` 只该有**一行** LISTENING。
+
 **要让命令行抢浏览器（建批 / 取数）时，按这个顺序**（用户 2026-09-29 授权"需要用的时候直接关，不用问"）：
 
 ```powershell

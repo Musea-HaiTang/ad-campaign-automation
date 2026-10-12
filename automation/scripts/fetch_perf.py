@@ -317,8 +317,10 @@ class Browser:
             self.close()          # 别留半截状态：失败就当没开过
             # 起不来最常见的两种原因，直接给人话，别甩一大坨 playwright 日志
             raise RuntimeError(
-                "%s\n  浏览器起不来。多半是：① 看板（web/app.py）正开着——一个登录 profile 同时只能被"
-                "一个进程用，先关掉那个窗口再跑命令行（或直接用看板上的「刷新 / 取数」）；"
+                "%s\n  浏览器起不来。多半是：① `.browser-profile` 这个登录 profile 已经被别的进程占着——"
+                "看板（web/app.py）窗口、命令行脚本、或者**第二个看板实例**（Windows 不会拦你起第二个，"
+                "2026-10-12 踩到：两个看板都绑 8770、抢同一只浏览器，一个正常另一个每次取数都报这句）"
+                "都在抢它；先确认只剩一个、把多余的那个关掉（残留的 Edge 与 `lockfile` 见 web/README）；"
                 "② 登录态过期——跑 automation/scripts/wait_login.py 重新登录。" % str(e).strip().splitlines()[0]
             ) from e
         return self._ctx

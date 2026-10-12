@@ -63,6 +63,7 @@ import argparse
 import collections
 import datetime
 import json
+import os
 import queue
 import re
 import sys
@@ -678,6 +679,18 @@ class Handler(BaseHTTPRequestHandler):
         print("  ! %s" % (fmt % args), flush=True)
 
 
+class BoardServer(ThreadingHTTPServer):
+    """看板服务的 HTTP 服务端——**Windows 下不许第二个实例绑同一个端口**。
+
+    2026-10-12 踩到：`http.server` 默认 `allow_reuse_address = 1`，而这在 Windows 上等价于
+    SO_REUSEADDR——第二个看板照样能绑上 8770、**不报"端口被占用"**，于是两个实例一起去抢
+    同一个 `.browser-profile`：抢到锁的那个正常，另一个每次取数都报"浏览器起不来"，
+    页面请求又在两个实例之间随机落 → 看起来像"时好时坏"。
+    Windows 下关掉它 → 第二个实例启动就绑不上（报清楚），比默默变成两个服务强。
+    """
+    allow_reuse_address = (os.name != "nt")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None,
@@ -737,11 +750,19 @@ def main():
           % ("每 %d 分钟一次（每天第一次先「取数」固定昨天）" % AUTO["minutes"]
              if AUTO["minutes"] else "已关闭（--auto 0）"), flush=True)
     print("  " + "─" * 52 + "（下面只打：取数结果 / 自动刷新 / 出错）", flush=True)
+    # 端口**先绑上、再起浏览器**（2026-10-12）：绑不上就直接退出——绝不能在端口被占的情况下
+    # 还去起那只常驻浏览器，它会抢同一个 `.browser-profile`，把正在跑的那个看板搞成"浏览器起不来"。
+    try:
+        server = BoardServer((a.host, a.port), Handler)
+    except OSError as e:
+        raise SystemExit("  起不来：%s:%d 已经被占用——多半是**已经有一个看板在跑**"
+                         "（去关掉那个窗口 / 结束那个进程；一个登录 profile 同时只能被一个进程用）。\n"
+                         "  原始报错：%s" % (a.host, a.port, e))
     worker = threading.Thread(target=fetch_worker, name="fetch", daemon=True)
     worker.start()                 # 浏览器在它里面起来（起不来也不挡看板）
     threading.Thread(target=auto_worker, name="auto", daemon=True).start()
     try:
-        ThreadingHTTPServer((a.host, a.port), Handler).serve_forever()
+        server.serve_forever()
     except KeyboardInterrupt:
         print("\n  收到退出：关掉常驻浏览器，收工 …", flush=True)
     finally:
