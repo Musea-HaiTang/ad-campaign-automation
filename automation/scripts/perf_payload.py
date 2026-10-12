@@ -139,6 +139,25 @@ def bucket_view(cfg, pk_buckets, colors, batches, batch_judge, specs):
     return out
 
 
+def human_action(ha):
+    """`配置/复盘动作.yaml` 的一条记录 → payload 里的 `action`（页面据此写「调整动作」）。
+
+    记录要求带 `at`（判定依据的那次取数时间）和 `readings`（当时每个槽位的 `[曝光, 点击]`）——
+    2026-10-12 定：没有这两样，看板就分不出"这条是刚判的"还是"三天前建批时写的"，
+    旧结论会被当成现结论看（KIRO D 桶五批踩过）。老记录缺这两样也照出，页面写「未记录」。
+    """
+    readings = {}
+    for k, v in (ha.get("readings") or {}).items():
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            readings[str(k)] = [int(v[0]), int(v[1])]
+    return {"keep": [str(x) for x in (ha.get("keep") or [])],
+            "drop": [str(x) for x in (ha.get("drop") or [])],
+            "new": int(ha.get("new") or 0),
+            "note": str(ha.get("note") or ""),
+            "at": str(ha.get("at") or ""),
+            "readings": readings}
+
+
 def build_payload(cfg, conn, today=None, config_path=None):
     """台账库 → 看板 JSON（页面要什么这里给什么，聚合只在这一处做）。
 
@@ -286,20 +305,24 @@ def build_payload(cfg, conn, today=None, config_path=None):
             # 人定的调整动作（`配置/复盘动作.yaml`）：**有记录就用它顶掉规则结果**
             # （用户 2026-09-30 定：没调整显示建议动作、调整过显示调整动作）。
             # 槽位名直接对齐后台 AB 组 = 读数里的 group_label，所以保留/下的小标也一起对齐。
+            # ⚠ 记录挂的是**被判过的那一批**（2026-10-12 定）——所以这里按"本行这批"查表，查到的就是
+            # "这批的结论"；键写成**新批**（建批时写的那种）就查不到 = 回落规则，不会再把上一批的结论
+            # 当这一批用（KIRO D 桶五批被顶了三天就是键挂错批 + 看板没时间概念）。
             ha = (after.get(b["id"]) or {}).get(bid)          # 2026-10-08 起按**批次 id**取
             if ha is None:                                     # 旧文件（后缀键）兜底一次
                 ha = (after.get(b["suffix"] or "") or {}).get(bid)
             if ha:
-                keep_labels = [str(x) for x in (ha.get("keep") or [])]
+                act = human_action(ha)
                 for g in groups:
-                    g["keep"] = g["label"] in keep_labels
+                    g["keep"] = g["label"] in act["keep"]
                 row["keep"] = [g["res"] for g in groups if g["keep"]]
                 row["drop"] = [g["res"] for g in groups if not g["keep"]]
-                row["newCopy"] = int(ha.get("new") or 0)
-                row["action"] = {"keep": keep_labels,
-                                 "drop": [str(x) for x in (ha.get("drop") or [])],
-                                 "new": int(ha.get("new") or 0),
-                                 "note": str(ha.get("note") or "")}
+                row["newCopy"] = act["new"]
+                # 判定当时的读数 vs 现在：对不上 = 手里这条是旧时点的结论（页面打「判定后数据又变了」）
+                act["changed"] = [g["label"] for g in groups
+                                  if act["readings"].get(g["label"]) is not None
+                                  and act["readings"][g["label"]] != [g["e"] or 0, g["c"] or 0]]
+                row["action"] = act
             row.update({"bucket": bid, "task": tname, "batch": b["id"], "groups": groups})
             rows_out.append(row)
         batch_judge[b["id"]] = rows_out

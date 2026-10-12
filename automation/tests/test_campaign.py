@@ -399,7 +399,8 @@ class DiscoverTest(unittest.TestCase):
 class AfterActionsTest(unittest.TestCase):
     """复盘动作（**人定的调整**，2026-09-30 用户定）：有记录 = 页面写「调整动作」，没记录 = 回落规则「建议动作」。
 
-    键是**批次后缀**（首批 `''`、二批 `-2`……），和 `判定门槛.yaml` 的 `batch` 同一套写法。
+    键是**被判过的那一批**的批次 id（2026-10-08 起；旧的后缀键 `''` / `-2` 仍能兜底读，2026-10-12 定下
+    "记录挂在你判的那一批"这条口径）。
     """
 
     def setUp(self):
@@ -425,6 +426,16 @@ class AfterActionsTest(unittest.TestCase):
         self.assertEqual(got[""]["A"]["keep"], ["实验组1"])
         self.assertEqual(got[""]["A"]["new"], 2)
         self.assertEqual(got["-2"]["A"]["keep"], ["实验组2"])
+
+    def test_判定时间与当时读数一起读出来(self):
+        """`at` + `readings` 是 2026-10-12 加的：看板靠它们分「刚判的」和「几天前判的」。"""
+        self._write({"buckets": {"2026-10-08-四批": {"A": {
+            "keep": ["实验组2"], "drop": [], "new": 1, "at": "2026-10-09 10:24",
+            "readings": {"实验组1": [1764, 0], "实验组2": [1632, 2]}, "note": "判定"}}}})
+        got = campaign.load_after_actions(str(self.cfg))
+        self.assertEqual(got["2026-10-08-四批"]["A"]["at"], "2026-10-09 10:24")
+        self.assertEqual(got["2026-10-08-四批"]["A"]["readings"],
+                         {"实验组1": [1764, 0], "实验组2": [1632, 2]})
 
     def test_文件坏了当成没有_不炸页面(self):
         self.human.write_text("batches: {A: [", encoding="utf-8")

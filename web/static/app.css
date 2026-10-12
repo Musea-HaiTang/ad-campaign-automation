@@ -189,6 +189,8 @@ input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer;opacity:.55}
 .cmpprog b{font-size:14px;color:var(--fg)}
 .cmpprog .barwrap{flex:1 1 auto;width:auto}
 .cmpadv{color:var(--fg);font-size:12.5px}
+.cmpat{color:var(--dim);font-weight:400}
+.cmpdrift{margin-top:7px;font-size:12.5px;color:var(--accent);background:#FDF1E3;border-radius:8px;padding:6px 9px}
 .cmprule{height:1px;background:var(--muted);margin:14px 0}
 .cmpslot{display:flex;align-items:center;gap:7px;font-size:13px}
 .cmpslot b{font-weight:600}

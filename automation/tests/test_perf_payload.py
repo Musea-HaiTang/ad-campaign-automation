@@ -323,18 +323,40 @@ class TestBatchScope(unittest.TestCase):
         用户 2026-09-30：「没调整的时候那就是建议动作，调整过了就写调整动作，这样方便我们后续看」。
         """
         p = str(self.act / "配置" / "复盘动作.yaml")
-        self._write(p, {"batches": {"-3": {"B": {"keep": ["实验组2"], "drop": ["对照组", "实验组1"],
-                                                 "new": 2, "note": "用户 2026-09-30 定：只留实验2"}}}})
+        self._write(p, {"buckets": {"-3": {"B": {
+            "keep": ["实验组2"], "drop": ["对照组", "实验组1"], "new": 2,
+            "at": "2026-09-20 09:39",
+            "readings": {"对照组": [700, 1], "实验组1": [750, 1], "实验组2": [750, 0]},
+            "note": "用户 2026-09-30 定：只留实验2"}}}})
         self.addCleanup(os.remove, p)
         j = pp.build_payload(CFG, self.conn, today=D2,
                              config_path=self.cfg_path)["batchJudge"]["2026-09-20-换名单"][0]
         self.assertEqual(j["action"], {"keep": ["实验组2"], "drop": ["对照组", "实验组1"],
-                                       "new": 2, "note": "用户 2026-09-30 定：只留实验2"})
+                                       "new": 2, "note": "用户 2026-09-30 定：只留实验2",
+                                       "at": "2026-09-20 09:39",
+                                       "readings": {"对照组": [700, 1], "实验组1": [750, 1],
+                                                    "实验组2": [750, 0]},
+                                       # 记录里对照是 700/1，现在是 750/2 → 这条是旧时点的结论（页面报「数据已变」）
+                                       "changed": ["对照组"]})
         self.assertEqual(j["keep"], [ACT + "-B类 · 实验2-3"])         # 规则本来会留对照+实验1
         self.assertEqual(j["drop"], [ACT + "-B类 · 对照-3", ACT + "-B类 · 实验1-3"])
         self.assertEqual(j["newCopy"], 2)
         self.assertEqual({g["label"]: g["keep"] for g in j["groups"]},
                          {"对照组": False, "实验组1": False, "实验组2": True})
+
+    def test_老记录没写判定时间和读数_照出但不报数据已变(self):
+        """2026-10-12 之前写的记录只有 keep/drop/new/note：照样算「调整动作」，
+        但没法判断是不是过期（没有当时读数可比），所以 `changed` 空、页面不报「数据已变」。"""
+        p = str(self.act / "配置" / "复盘动作.yaml")
+        self._write(p, {"buckets": {"-3": {"B": {"keep": ["实验组2"],
+                                                 "drop": ["对照组", "实验组1"],
+                                                 "new": 0, "note": "老记录"}}}})
+        self.addCleanup(os.remove, p)
+        j = pp.build_payload(CFG, self.conn, today=D2,
+                             config_path=self.cfg_path)["batchJudge"]["2026-09-20-换名单"][0]
+        self.assertEqual(j["action"]["at"], "")
+        self.assertEqual(j["action"]["readings"], {})
+        self.assertEqual(j["action"]["changed"], [])
 
 
 class Test待复盘清单(unittest.TestCase):

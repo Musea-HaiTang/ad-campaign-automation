@@ -129,7 +129,9 @@ function renderBuckets(){                      // 主表：一行 = 一个桶**�
     var act = '<span class="badge dim">—</span>';
     if(j.action){                               // 调整过 → 写**调整动作**（人定的，`配置/复盘动作.yaml`）
       act = '<span class="badge hi">调整动作</span> 留 ' + ((j.action.keep || []).join("、") || "—") +
-            ' ｜ 下 ' + ((j.action.drop || []).join("、") || "—");
+            ' ｜ 下 ' + ((j.action.drop || []).join("、") || "—") +
+            (j.action.at ? ' <span class="hint">' + esc(j.action.at) + '</span>' : '');
+      if((j.action.changed || []).length) act += ' <span class="badge warn">数据已变</span>';
       if(j.action.note) act += ideaBtn(j.batch, bk.id);   // 调整思路收进图标弹窗（2026-09-30 用户定）
     } else if(hasTh && j.ready){                // 没调整 → 写**建议动作**（规则算的）
       act = '<span class="badge dim">建议动作</span> <b class="actkeep">留 ' +
@@ -275,6 +277,33 @@ function betterOf(g, h){                        // g 比 h 好吗？大卡排序
   if((g.c || 0) !== (h.c || 0)) return (g.c || 0) > (h.c || 0);
   return (g.e || 0) > (h.e || 0);
 }
+// ---- 「调整动作」是**什么时候**判的、依据哪次读数（2026-10-12 用户定）----
+// 起因：建批时写进 `复盘动作.yaml` 的记录当时挂在**新批**名下，看板把它当"这一批的结论"用，
+// 几天后数据反过来也不刷新（对照明明 15 击却被标「下」）。现在每条记录都带判定时间 + 当时读数：
+// 页面把"当时 vs 现在"摆出来，旧结论再也不会被当成现结论看。
+function atText(a){                             // （判定依据 2026-10-09 10:24 的读数）
+  if(!a) return '';
+  return a.at ? ' <span class="cmpat">（判定依据 ' + esc(a.at) + ' 的读数）</span>'
+              : ' <span class="cmpat">（判定时间未记录）</span>';
+}
+function rdText(readings){                      // 对照 1,340/1 ｜ 实验1 1,241/2
+  var ks = Object.keys(readings || {});
+  if(!ks.length) return "未记录";
+  return ks.map(function(k){
+    var v = readings[k] || [0, 0];
+    return esc(k) + ' ' + fmt(v[0]) + '/' + fmt(v[1]);
+  }).join(" ｜ ");
+}
+function driftText(a, gs){                      // '' = 没变化（或这条记录没写当时读数）
+  var ch = (a && a.changed) || [];
+  if(!ch.length) return '';
+  var now = {};
+  (gs || []).forEach(function(g){ now[g.label] = g; });
+  return '判定后数据又变了：' + ch.map(function(lb){
+    var was = (a.readings || {})[lb] || [0, 0], g = now[lb] || {e: 0, c: 0};
+    return esc(lb) + ' ' + fmt(was[0]) + '/' + fmt(was[1]) + ' → ' + fmt(g.e || 0) + '/' + fmt(g.c || 0);
+  }).join(" ｜ ") + '（这条是 ' + esc(a.at || "更早") + ' 判的，要看最新的数据就重新判定）';
+}
 function mctxOf(bk, j){
   var gs = groupsBySlot(j.groups || []);
   var th = (bk.threshold != null) ? bk.threshold : j.threshold;
@@ -290,12 +319,18 @@ function mctxOf(bk, j){
   // 只在**保留**里挑：被"下"的那条放大卡，页面会自己打自己（大卡挂着红标"下"）。
   var top = keep.reduce(function(acc, g){ return betterOf(g, acc) ? g : acc; }, null);
   var ready = !!th && e >= th;
+  var a = j.action, actTxt;
+  if(a){                                        // 人定过 → 写「调整动作」+ 判定时间（**不写「建议」**）
+    actTxt = '<span class="badge hi">调整动作</span> <b class="actkeep">留 ' +
+      (slotNames(j.keep) || "—") + '</b> ｜ <span class="actdrop">下 ' +
+      (slotNames(j.drop) || "—") + '</span>' + atText(a);
+  } else if(!th) { actTxt = '建议：无门槛'; }
+  else if(ready) { actTxt = '建议：<b class="actkeep">留 ' + (slotNames(j.keep) || "—") +
+      '</b> ｜ <span class="actdrop">下 ' + (slotNames(j.drop) || "—") + '</span>'; }
+  else { actTxt = '建议：继续观察'; }
   return {gs: gs, th: th, e: e, ready: ready, pass: !!j.pass, maxE: maxE, best: best, keep: keep,
           hero: top || best || gs[0], bk: bk, j: j,
-          act: th ? (ready
-            ? '建议：<b class="actkeep">留 ' + (slotNames(j.keep) || "—") +
-              '</b> ｜ <span class="actdrop">下 ' + (slotNames(j.drop) || "—") + '</span>'
-            : '建议：继续观察') : '建议：无门槛'};
+          act: actTxt, drift: driftText(a, gs)};
 }
 function markOf(g, c){
   if(!c.th) return '<span class="badge dim">—</span>';
@@ -383,6 +418,7 @@ function renderModal(){
       (c.th ? fmt(c.th) : "—") + '</span><span class="barwrap"><span class="bar" style="width:' +
       (c.th ? Math.min(100, c.e / c.th * 100).toFixed(1) : 0) + '%;background:' + bk.color +
       '"></span></span></div><div class="cmpadv">' + c.act + '</div></div>' +
+    (c.drift ? '<div class="cmpdrift">⚠ ' + c.drift + '</div>' : '') +
     '<div class="cmprule"></div>' +
     (style === "hero" ? bodyHero(c) : bodyScore(c));
 }
@@ -405,10 +441,16 @@ function openIdea(key){                        // 弹窗：这次为什么这么
   $("mtitle").textContent = (topicOf(j) || ("桶 " + bid)) + " · 调整思路";
   $("mbody").innerHTML =
     '<div class="mline"><span class="k">批次</span><span>' + esc(bl ? bl.label : batch) + "</span></div>" +
+    '<div class="mline"><span class="k">判定依据</span><span>' +
+      (j.action.at ? esc(j.action.at) + " 的读数" : "未记录") + "</span></div>" +
+    '<div class="mline"><span class="k">当时读数</span><span>' + rdText(j.action.readings) + "</span></div>" +
     '<div class="mline"><span class="k">本次调整</span><span>留 ' +
       ((j.action.keep || []).join("、") || "—") + " ｜ 下 " +
       ((j.action.drop || []).join("、") || "—") + "</span></div>" +
-    '<div class="mline"><span class="k">调整思路</span><span>' + esc(j.action.note) + "</span></div>";
+    '<div class="mline"><span class="k">调整思路</span><span>' + esc(j.action.note) + "</span></div>" +
+    (driftText(j.action, j.groups) ?
+      '<div class="mline"><span class="k">⚠ 数据已变</span><span class="warn">' +
+      driftText(j.action, j.groups) + "</span></div>" : "");
   $("modal").hidden = false;
 }
 function closeIdea(){ if($("modal")) $("modal").hidden = true; }

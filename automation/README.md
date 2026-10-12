@@ -53,22 +53,14 @@ automation/
 │   ├── test_selection.py    # 圈选的纯函数测试（词表读取 / CSV 落盘路径）
 │   ├── test_distribution_ids.py # 建名单的纯函数测试（后台计数回读 / 名单命名 / CSV 读 id）
 │   └── test_run_audience.py # 圈选「提交前闸门」测试（假页面：校验没过只点取消、绝不点确定）
-├── docs/                    # 每个任务的说明（按任务名）
-│   ├── run_taskgroup.md
-│   ├── run_ads.md
-│   ├── run_audience.md
-│   ├── run_distribution.md
-│   ├── run_selection.md
-│   ├── run_distribution_ids.md
-│   ├── run_taskorder.md
-│   ├── check_campaign.md
-│   ├── check_batch_plan.md
-│   ├── fetch_perf.md
-│   ├── visualize_perf.md
-│   ├── judge_batch.md
-│   ├── record_audience.md
-│   ├── record_report.md
-│   ├── wait_login.md
+├── docs/                    # 说明书：一个脚本一份，文件名 = 脚本名把 .py 换成 .md
+│   ├── 执行层全流程.md      # ★ 入口：每一步做什么、读哪份文档、在哪停（建批前先读这页）
+│   ├── run_taskgroup.md / run_ads.md / run_audience.md / run_distribution.md
+│   ├── run_selection.md / run_distribution_ids.md / run_taskorder.md
+│   ├── check_campaign.md / check_batch_plan.md / wait_login.md
+│   ├── fetch_perf.md / visualize_perf.md / judge_batch.md
+│   ├── record_audience.md / record_report.md / seed_demo.md   # 后两个是开发用（seed_demo 给 _验证数据 造演示数据）
+│   ├── 巡检与自动复盘.md     # 运维：定时巡检怎么配、什么条件下自动起复盘对话
 │   └── 执行层实测耗时.md     # 人看的记录：各脚本实测用时（不是流程规则，不进 AI 阶段阅读清单）
 └── campaigns/README.md      # 整活动 YAML 字段规范（schema，工具侧）
 
