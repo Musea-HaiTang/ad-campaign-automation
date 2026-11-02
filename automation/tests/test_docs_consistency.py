@@ -31,6 +31,12 @@ LEGACY_REFERENCES = (
     "daily_change",
     "批次/2026-",
 )
+MACHINE_SPECIFIC_REFERENCES = (
+    "3.12.4",
+    "3.14.6",
+    "本机默认 `python`",
+    "启动浏览器需提权",
+)
 
 
 def active_files():
@@ -71,6 +77,15 @@ class DocsConsistencyTest(unittest.TestCase):
         self.assertNotIn("项目正在按", readme)
         self.assertNotIn("继续完成 P1", readme)
         self.assertIn("P0 发布阻断项和 P1 长期维护整改", readme)
+
+    def test_环境文档不写个人机器Python补丁版本(self):
+        hits = []
+        for path in active_files():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for pattern in MACHINE_SPECIFIC_REFERENCES:
+                if pattern in text:
+                    hits.append(f"{path.relative_to(ROOT)}: {pattern}")
+        self.assertEqual(hits, [], "发现机器特定环境表述：\n" + "\n".join(hits))
 
 
 if __name__ == "__main__":

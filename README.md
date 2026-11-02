@@ -76,11 +76,11 @@ python --version
 python -m venv .venv
 ```
 
-只有 `python --version` 显示 Python 3.12.x 时，才能直接执行第二条命令。
-如果机器默认 `python` 是其他版本，请显式使用已安装的 Python 3.12：
+确认 `python --version` 显示 Python 3.12-3.14 后，才能直接执行第二条命令。
+如果不确定或默认 `python` 版本不兼容，请显式使用任意一个已安装的 Python 3.12-3.14：
 
 ```powershell
-& "<你的 Python 3.12 安装目录>\python.exe" -m venv .venv
+& "<你的 Python 3.12-3.14 安装目录>\python.exe" -m venv .venv
 ```
 
 ### 3. 手动安装依赖和浏览器
