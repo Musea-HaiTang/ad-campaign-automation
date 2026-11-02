@@ -15,8 +15,6 @@ SCAN_ROOTS = (
     ROOT / "web",
     ROOT / "scripts",
     ROOT / "ad_output" / "AGENTS.md",
-    ROOT / "ad_output" / "memory" / "README.md",
-    ROOT / "ad_output" / "memory" / "MEMORY.md",
     ROOT / "ad_output" / "流程文档",
 )
 EXCLUDED_PARTS = {"tests", "__pycache__", "_tmp"}
@@ -99,8 +97,6 @@ class DocsConsistencyTest(unittest.TestCase):
             ROOT / "automation" / "docs" / "巡检与自动复盘.md",
             ROOT / "automation" / "docs" / "复盘会话格式.md",
             ROOT / "ad_output" / "AGENTS.md",
-            ROOT / "ad_output" / "memory" / "README.md",
-            ROOT / "ad_output" / "memory" / "MEMORY.md",
             ROOT / "ad_output" / "流程文档" / "CSDN广告投放自动化流程.md",
         )
         self.assertEqual([path for path in required if not path.is_file()], [])
@@ -119,8 +115,6 @@ class DocsConsistencyTest(unittest.TestCase):
             "automation/docs/巡检与自动复盘.md",
             "automation/docs/复盘会话格式.md",
             "ad_output/AGENTS.md",
-            "ad_output/memory/README.md",
-            "ad_output/memory/MEMORY.md",
             "ad_output/流程文档/CSDN广告投放自动化流程.md",
         )
         missing = [

@@ -12,13 +12,8 @@ activities/*/数据/**
 !activities/*/数据/README.md
 # 彩排借用对象的 id
 activities/_验证数据/配置/
-# 投放数据台账与经验（真实曝光点击数字）；只放行通用说明和安全模板
-ad_output/memory/*
-!ad_output/memory/README.md
-!ad_output/memory/MEMORY.md
-!ad_output/memory/模板/
-ad_output/memory/模板/*
-!ad_output/memory/模板/暂缓经验模板.md
+# 投放数据与经验统一进数据库，不维护独立 memory 目录
+ad_output/memory/
 # 数据平台圈选录制与实验物料
 _experiments/
 

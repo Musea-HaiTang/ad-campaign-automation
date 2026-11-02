@@ -45,7 +45,7 @@
 | 阶段 | 只读这些 |
 |---|---|
 | 1～2 摸产品、建细则 | 活动链接正文、本活动 `活动细则.md`、[`活动细则模板`](../../activities/_活动细则模板.md)；联网搜索由当前 AI 产品提供 |
-| 3～5 分人群、关键词、文案 | `ad_output/AGENTS.md`；本文件 §0、§4～§6；[`选角度流程.md`](选角度流程.md)、[`想法池与1000曝光复盘流程.md`](想法池与1000曝光复盘流程.md)、[`术语真源.md`](术语真源.md)；`文案风格/`；`memory/MEMORY.md` 与对应暂缓经验 |
+| 3～5 分人群、关键词、文案 | `ad_output/AGENTS.md`；本文件 §0、§4～§6；[`选角度流程.md`](选角度流程.md)、[`想法池与1000曝光复盘流程.md`](想法池与1000曝光复盘流程.md)、[`术语真源.md`](术语真源.md)；`文案风格/` |
 | 6～7 物料、YAML、执行 | [`投放物料/README.md`](../投放物料/README.md)、[`campaigns/README.md`](../../automation/campaigns/README.md)、[`执行层全流程.md`](../../automation/docs/执行层全流程.md) 及当前步骤的脚本说明 |
 | 8 取数、判定、复盘 | [`fetch_perf.md`](../../automation/docs/fetch_perf.md)、[`judge_batch.md`](../../automation/docs/judge_batch.md)、[`visualize_perf.md`](../../automation/docs/visualize_perf.md)、[`web/README.md`](../../web/README.md)、本活动 `数据/`、数据库 `review` / `review_resource` |
 
@@ -320,4 +320,3 @@ A 路径按 §0 的日均曝光门槛验收；未达标就改词重投。
 ### 11.2 文件边界
 
 - [`文案自审.md`](../文案风格/文案自审.md) 和 [`复盘会话格式.md`](../../automation/docs/复盘会话格式.md) 未经用户当次允许不得修改。
-- `MEMORY.md` 只写已验证且获用户允许的吸引力经验；未验候选放暂缓经验，数据直接查数据库。

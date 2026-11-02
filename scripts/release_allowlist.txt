@@ -31,9 +31,6 @@ activities/_活动细则模板.md
 activities/_示例活动/*
 
 ad_output/AGENTS.md
-ad_output/memory/README.md
-ad_output/memory/MEMORY.md
-ad_output/memory/模板/暂缓经验模板.md
 ad_output/工具/*
 ad_output/投放物料/README.md
 ad_output/投放物料/模板/*

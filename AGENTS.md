@@ -24,7 +24,6 @@
 | 路径 | 作用 |
 |---|---|
 | `ad_output/流程文档/CSDN广告投放自动化流程.md` | 唯一权威 SOP |
-| `ad_output/memory/MEMORY.md` | 广告文案的稳定经验 |
 | `activities/{活动名}/README.md` | 当前活动资料入口 |
 
 ## 改动纪律
