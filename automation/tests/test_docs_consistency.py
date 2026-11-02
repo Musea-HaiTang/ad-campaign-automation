@@ -66,6 +66,12 @@ class DocsConsistencyTest(unittest.TestCase):
         )
         self.assertEqual([path for path in required if not path.is_file()], [])
 
+    def test_README状态不把已完成项目写成进行中(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("项目正在按", readme)
+        self.assertNotIn("继续完成 P1", readme)
+        self.assertIn("P0 发布阻断项和 P1 长期维护整改", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

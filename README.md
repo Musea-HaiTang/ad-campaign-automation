@@ -19,9 +19,11 @@
 
 ## 当前状态
 
-当前版本的 P0 发布阻断项已全部完成，并已在独立干净工作空间通过一键部署、自动化测试、
-动态端口和 CSDN 双站登录验收。项目正在按
-[发布前整改计划](automation/docs/发布前整改计划.md)继续完成 P1 的长期维护能力。
+当前版本已完成 P0 发布阻断项和 P1 长期维护整改，并已在独立干净工作空间通过一键部署、
+自动化测试、动态端口、CSDN 双站登录、备份恢复、缓存清理和发布预检验收。
+
+普适化首版已发布到私有仓库：
+[Musea-HaiTang/ad-campaign-automation](https://github.com/Musea-HaiTang/ad-campaign-automation)。
 
 首次使用需要：
 
