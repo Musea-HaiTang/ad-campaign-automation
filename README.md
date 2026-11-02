@@ -25,6 +25,8 @@
 普适化首版已发布到私有仓库：
 [Musea-HaiTang/ad-campaign-automation](https://github.com/Musea-HaiTang/ad-campaign-automation)。
 
+第一次接触项目时，先读[运营使用说明](运营使用说明.md)；也可以把这份说明交给 AI，让它按文档向其他运营讲解。
+
 首次使用需要：
 
 - 新建独立工作空间后再执行一键部署；

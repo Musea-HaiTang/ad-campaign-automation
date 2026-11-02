@@ -9,7 +9,7 @@ controls:
   materialPath:
   - 动态广告
   - 其它
-  username: lihang
+  username: sample-user
   defaults:
     businessLine: 示例事业部
     isPopup: false

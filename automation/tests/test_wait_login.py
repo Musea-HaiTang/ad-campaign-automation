@@ -86,12 +86,12 @@ class ProbeAdminTest(unittest.TestCase):
 
     def test_有身份信息才算登录完成(self):
         page = self._Page({
-            "userName": "lihang1", "hasToken": True, "hasUser": True,
+            "userName": "sample-user", "hasToken": True, "hasUser": True,
             "url": "https://mp-admin.csdn.net/",
         })
         ok, why = wl.probe_admin(page)
         self.assertTrue(ok)
-        self.assertIn("lihang1", why)
+        self.assertIn("sample-user", why)
 
     def test_旧会话但无用户名不算登录完成(self):
         page = self._Page({

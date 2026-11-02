@@ -3,6 +3,7 @@
 
 README.md
 AGENTS.md
+运营使用说明.md
 requirements.txt
 pytest.ini
 
@@ -32,7 +33,7 @@ activities/_示例活动/*
 ad_output/AGENTS.md
 ad_output/memory/README.md
 ad_output/memory/MEMORY.md
-ad_output/memory/模板/*
+ad_output/memory/模板/暂缓经验模板.md
 ad_output/工具/*
 ad_output/投放物料/README.md
 ad_output/投放物料/模板/*

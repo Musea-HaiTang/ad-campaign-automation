@@ -2,7 +2,7 @@
 """从「活动定义 YAML」生成整活动 YAML（供 automation 执行层脚本消费）。
 
 用法:
-    python gen_yaml.py --def activities/{活动}/活动定义.yaml [--username lihang] [--out ...]
+    python gen_yaml.py --def activities/{活动}/活动定义.yaml [--username <用户名>] [--out ...]
 
 产出遵循 automation/campaigns/README.md 的字段规范；活动内容全部来自活动定义 YAML，
 本脚本只做「装配」，名字一律问 naming 模块要（`automation/scripts/naming.py`，命名规则的唯一实现），
@@ -13,12 +13,14 @@
 契约见 automation/scripts/campaign.py 的 `RESOURCE.link`，落地在 run_ads.py（`res.get("link") or camp["activityLink"]`）。
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]           # ad_management/
+OPERATOR_CONFIG = ROOT / ".local" / "operator.json"
 sys.path.insert(0, str(ROOT / "automation" / "scripts"))
 
 import naming  # noqa: E402
@@ -38,7 +40,6 @@ CONTROLS = {
         "summary": {"placeholder": "解析自动生成描述", "type": "textarea"},
     },
 }
-DEFAULT_USERNAME = "lihang"
 
 # AB 槽位：role → 后台行名（后台要从对照组往下填满、不能跳行）+ 流量占比（按资源条数，合计必须 100%）
 ROLE_ORDER = [("control", "对照组"), ("experiment1", "实验组1"), ("experiment2", "实验组2")]
@@ -62,7 +63,30 @@ def derive_ab_groups(resources):
             for (role, label), w in zip(roles, weights)]
 
 
-def build(d, username=DEFAULT_USERNAME):
+def resolve_username(cli_username=None):
+    """命令行显式指定优先，否则读取首次登录后保存的当前操作者用户名。"""
+    if cli_username is not None:
+        username = str(cli_username).strip()
+        if not username:
+            raise SystemExit("--username 不能为空。")
+        return username
+    if not OPERATOR_CONFIG.is_file():
+        raise SystemExit(
+            "缺少 .local/operator.json。先运行 scripts/setup.ps1，"
+            "再运行 .venv\\Scripts\\python.exe scripts\\doctor.py --login 保存登录用户名。")
+    try:
+        data = json.loads(OPERATOR_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit("无法读取 .local/operator.json：" + str(exc)) from exc
+    username = str((data or {}).get("ad_username") or "").strip()
+    if not username:
+        raise SystemExit(
+            "操作者配置里没有 ad_username。先运行 "
+            ".venv\\Scripts\\python.exe scripts\\doctor.py --login 保存当前登录用户名。")
+    return username
+
+
+def build(d, username):
     camp = d["campaign"]
     sub = d["subBusinessLine"]
     t = d["taskOrder"]
@@ -142,13 +166,17 @@ def build(d, username=DEFAULT_USERNAME):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--def", required=True, dest="def_path", help="活动定义 YAML")
-    ap.add_argument("--username", default=DEFAULT_USERNAME, help="资源「用户名」，默认 lihang")
+    ap.add_argument(
+        "--username",
+        default=None,
+        help="资源用户名；省略时读取 .local/operator.json 中的 ad_username",
+    )
     ap.add_argument("--out", default=None, help="输出 YAML（默认 activities/{活动}/{前缀}.yaml）")
     a = ap.parse_args()
 
     d = yaml.safe_load(Path(a.def_path).read_text(encoding="utf-8"))
     out = Path(a.out) if a.out else Path(a.def_path).resolve().parent / ("%s.yaml" % naming.require_prefix(d["campaign"]))
-    data = build(d, username=a.username)
+    data = build(d, username=resolve_username(a.username))
     # 产出即验证：同一个契约检查器，坏 YAML 根本进不了 activities/
     errs = campaign.validate(data)
     if errs:

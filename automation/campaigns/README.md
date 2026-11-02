@@ -31,7 +31,7 @@
 | `channelType` | 类型标签，如 `页面类` |
 | `channel` | 渠道位，如 `PC博客详情页-新模版-T0` |
 | `materialPath` | 素材类型路径，当前渠道为 `[动态广告, 其它]` |
-| `username` | 动态广告用户名。生成器默认 `lihang`，可用 `gen_yaml.py --username <名字>` 覆盖 |
+| `username` | 动态广告用户名。生成器默认读取 `.local/operator.json` 的 `ad_username`，可用 `gen_yaml.py --username <名字>` 覆盖 |
 | `defaults` | 表单默认值：`businessLine` / `isPopup` / `adClient` / `closeBtnColor` |
 | `fields` | 文本控件定位：`title` / `summary` / `link` / `username`（placeholder + type） |
 

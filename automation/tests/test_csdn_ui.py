@@ -273,10 +273,10 @@ class LoginIdentityTest(unittest.TestCase):
 
     def test_身份齐全时返回当前用户名(self):
         page = self.Page({
-            "userName": "lihang1", "hasToken": True, "hasUser": True,
+            "userName": "sample-user", "hasToken": True, "hasUser": True,
             "url": "https://mp-admin.csdn.net/",
         })
-        self.assertEqual(csdn_ui.require_login_identity(page, timeout=0.01), "lihang1")
+        self.assertEqual(csdn_ui.require_login_identity(page, timeout=0.01), "sample-user")
 
     def test_只有旧会话没有用户名时拒绝执行(self):
         page = self.Page({

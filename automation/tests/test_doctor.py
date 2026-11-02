@@ -60,9 +60,9 @@ class DoctorTest(unittest.TestCase):
             old_path = doctor.OPERATOR_PATH
             try:
                 doctor.OPERATOR_PATH = path
-                doctor.write_ad_username("lihang")
+                doctor.write_ad_username("sample-user")
                 data = json.loads(path.read_text(encoding="utf-8"))
-                self.assertEqual(data, {"owner": "hang", "ad_username": "lihang"})
+                self.assertEqual(data, {"owner": "hang", "ad_username": "sample-user"})
             finally:
                 doctor.OPERATOR_PATH = old_path
 

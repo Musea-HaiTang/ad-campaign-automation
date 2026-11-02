@@ -8,8 +8,11 @@
     .venv\\Scripts\\python.exe -m unittest discover -s automation/tests -v
 """
 import pathlib
+import json
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -18,6 +21,8 @@ REPO = ROOT.parent
 sys.path.insert(0, str(REPO / "ad_output" / "工具"))
 
 import gen_yaml  # noqa: E402
+
+TEST_USERNAME = "sample-user"
 
 
 def fake_def(n_copies=3, abgroups=None):
@@ -56,7 +61,7 @@ def fake_def(n_copies=3, abgroups=None):
     }
 
 
-def build(d, username=gen_yaml.DEFAULT_USERNAME):
+def build(d, username=TEST_USERNAME):
     """跑一遍生成器的装配（`gen_yaml.build` 直接返回 dict，不落盘、不碰后台）。"""
     return gen_yaml.build(d, username=username)
 
@@ -101,7 +106,7 @@ class DeriveAbGroupsTest(unittest.TestCase):
         y = build(fake_def(3))
         controls = y["controls"]
         self.assertEqual(controls["materialPath"], ["动态广告", "其它"])
-        self.assertEqual(controls["username"], "lihang")
+        self.assertEqual(controls["username"], TEST_USERNAME)
         self.assertEqual(controls["fields"], {
             "link": {"placeholder": "请输入URL解析"},
             "title": {"placeholder": "解析自动生成标题"},
@@ -112,6 +117,28 @@ class DeriveAbGroupsTest(unittest.TestCase):
     def test_用户名可由接手人覆盖(self):
         y = build(fake_def(3), username="another-user")
         self.assertEqual(y["controls"]["username"], "another-user")
+
+    def test_省略参数时读取操作者配置的用户名(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = pathlib.Path(tmp) / "operator.json"
+            config.write_text(json.dumps({"owner": "ops", "ad_username": "login-user"}), encoding="utf-8")
+            with mock.patch.object(gen_yaml, "OPERATOR_CONFIG", config):
+                self.assertEqual(gen_yaml.resolve_username(), "login-user")
+
+    def test_命令行用户名优先于操作者配置(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = pathlib.Path(tmp) / "operator.json"
+            config.write_text(json.dumps({"owner": "ops", "ad_username": "login-user"}), encoding="utf-8")
+            with mock.patch.object(gen_yaml, "OPERATOR_CONFIG", config):
+                self.assertEqual(gen_yaml.resolve_username("explicit-user"), "explicit-user")
+
+    def test_缺少登录用户名时拒绝生成(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = pathlib.Path(tmp) / "operator.json"
+            config.write_text(json.dumps({"owner": "ops", "ad_username": None}), encoding="utf-8")
+            with mock.patch.object(gen_yaml, "OPERATOR_CONFIG", config):
+                with self.assertRaisesRegex(SystemExit, "ad_username"):
+                    gen_yaml.resolve_username()
 
 
 if __name__ == "__main__":

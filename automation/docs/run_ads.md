@@ -39,7 +39,7 @@
 
 > 执行器只认 `controls` + `audiences[].resources`，不写死某类——**加类型 = 换 `controls`**（如图片类改 `materialPath` / `fields`）。字段规范以 `campaigns/README.md` 为准。
 
-动态广告直接填写 URL、标题、用户名、描述；**不点「解析」也能填写和提交**。`username` 由当前使用人维护，目前为 `lihang`。
+动态广告直接填写 URL、标题、用户名、描述；**不点「解析」也能填写和提交**。`username` 默认读取首次登录后保存在 `.local/operator.json` 的 `ad_username`。
 
 ## 已知坑
 

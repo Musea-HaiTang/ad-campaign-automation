@@ -33,7 +33,7 @@ def good():
             "channelType": "页面类",
             "channel": "PC博客详情页-新模版-T0",
             "materialPath": ["动态广告", "其它"],
-            "username": "lihang",
+            "username": "sample-user",
             "defaults": {"businessLine": "企业服务事业部", "isPopup": False},
             "fields": {
                 "link": {"placeholder": "请输入URL解析"},

@@ -37,7 +37,6 @@ automation/
 │   ├── run_distribution.py  # 一键创建分发名单（第3.5步：圈选后、工单前；dry-run；--submit 才建）
 │   ├── run_selection.py     # 圈选博文（第3步另一种走法）：新数据平台取数出 CSV，**不建后台对象**
 │   ├── run_distribution_ids.py # 用博文 id 建分发名单（第3.5步另一种走法）：普通名单
-│   ├── deepseek_web_mcp.py # DeepSeek Search / Fetch 的最小 MCP stdio 服务（Codex 联网工具）
 │   ├── run_taskorder.py     # 建任务工单（第4步，逐桶；dry-run；--submit 才建）
 │   ├── check_campaign.py    # 活动体检（只读）：核对后台 5 类对象在不在、名字一字不差；查客群时顺带读「日均曝光(预估)」
 │   ├── check_batch_plan.py  # 批次 YAML 计划自检（离线、秒级）：权重按资源数 / AB 位次不能跳 / 名字↔槽位
@@ -67,7 +66,6 @@ automation/
 │   ├── activity_state.md    # 活动启停命令与边界
 │   ├── run_taskgroup.md / run_ads.md / run_audience.md / run_distribution.md
 │   ├── run_selection.md / run_distribution_ids.md / run_taskorder.md
-│   ├── deepseek_web_mcp.md  # DeepSeek Search / Fetch 的 MCP 注册与鉴权
 │   ├── check_campaign.md / check_batch_plan.md / check_pool.md / wait_login.md
 │   ├── fetch_perf.md / visualize_perf.md / judge_batch.md
 │   ├── record_audience.md / record_report.md   # 开发用录制说明

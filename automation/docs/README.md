@@ -41,7 +41,6 @@
 **开发与维护**
 
 - 页面录制：`record_audience.md`、`record_report.md`
-- 联网 MCP：`deepseek_web_mcp.md`
 - 磁盘维护：`磁盘清理.md`
 - 发布前工作：`发布前整改计划.md`
 
