@@ -35,6 +35,7 @@ ad_output/工具/*
 ad_output/投放物料/README.md
 ad_output/投放物料/模板/*
 ad_output/文案风格/*
+ad_output/流程文档/CSDN广告投放全流程图.html
 ad_output/流程文档/CSDN广告投放自动化流程.md
 ad_output/流程文档/小改流程.md
 ad_output/流程文档/想法池与1000曝光复盘流程.md
