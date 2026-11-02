@@ -1,38 +1,44 @@
 # -*- coding: utf-8 -*-
-"""投放看板服务（本地）：浏览器打开就是看板，页面自己来拿数据；取数用一只**常驻浏览器**。
+"""投放看板服务（本地）：浏览器打开就是看板，页面自己来拿数据；取数挂在一只**公共浏览器**上。
 
 用户 2026-09-17 定：可视化走「**前后端分离**」——
     ① 取数 `automation/scripts/fetch_perf.py`（要登录态、连后台；**增量**）→ 写台账库
-    ② 本服务（`web/app.py`）读**台账库**（`activities/_db/投放数据.db`）→ 聚合成 JSON → 交给页面
+    ② 本服务（`web/app.py`）读**数据库 v2**（`activities/_db/投放数据.db`）→ 聚合成 JSON → 交给页面
     ③ 页面（`web/static/`）`fetch` → 渲染；筛选 / 切换都在浏览器里算
 
-用户 2026-09-24 定：**浏览器常驻**——双击 `web/start.bat` 起服务时就把浏览器开起来（无窗口），
-之后每次「刷新 / 取数」都复用它（省掉每次 ≈1.7 秒的起/关浏览器开销）；
-**关掉服务窗口 / Ctrl+C 时一起关**。取数逻辑仍在 `automation/scripts/fetch_perf.py`（`fetch_mod.run`），
-本服务只是把它常驻的那只浏览器喂给它——依赖方向还是 web → automation，没变。
+用户 2026-09-24 定：**浏览器常驻**——双击 `web/start-hidden.vbs` 起服务时就开起来，之后每次「刷新 / 取数」
+都复用它（省掉每次 ≈1.7 秒的起/关浏览器开销）。取数逻辑仍在 `automation/scripts/fetch_perf.py`
+（`fetch_mod.run`），本服务只是把那只浏览器喂给它——依赖方向还是 web → automation，没变。
 
-用户 2026-09-28 定：**一个服务管多个活动**（方案见 `web/多活动改造方案.md`）——
+用户 2026-10-16 定：那只浏览器改成**独立于本服务的公共浏览器**（`automation/scripts/
+browser_broker.py`，首选 CDP 9222，冲突时使用实际端口）：以前"一个登录 profile 只能被一个进程用"，开建任务的浏览器就把看板
+的取数全挤没了，只能手工"停看板 → 跑脚本 → 起看板"；现在谁都不用抢——看板、建任务脚本、
+`wait_login.py` 同时挂上去、各开各的标签页。**关掉本服务窗口不再关浏览器**（它还归别的程序用），
+要关就 `python automation/scripts/browser_broker.py --stop`。
+
+用户 2026-09-28 定：**一个服务管多个活动**——
 启动时用 `campaign.discover()` 扫 `activities/*/配置/*.yaml` 建一张**活动登记表**；
 下面每个接口都可以带 `?activity=<任务组名>`，不给就用默认活动（有数据的那个）。
-**浏览器仍然只有一只**（一个登录 profile 只能被一个进程用），所以取数是**串行**的；
-但「今天已取」的配额、取数流水、状态都是**按活动各算一份**。
+**浏览器仍然只有一只**（公共资源，大家挂它），所以取数是**串行**的；
+但「今天已取」的配额、取数记录、状态都是**按活动各算一份**。
 
 接口（全部只读，不写文件、不连后台）：
     GET /                      看板页面
     GET /app.css, /app.js      页面资源
+    GET /api/health            服务身份、PID、实际端口和数据库路径
     GET /api/activities        活动登记表（id / 标签 / 目录 / 库内数据到哪天）
     GET /api/perf              台账聚合好的 JSON（区间 = 库里有的全部日期）
     GET /api/todo              **所有活动**里「到门槛 · 没复盘 · 还在投」的工单
                                （页面右上角那个角标 + 弹窗；跨活动，所以只能服务端算）
-    GET /api/snapshots         取数流水（原始存档）清单——不是数据源，只是取数凭据
+    GET /api/snapshots         数据库 `fetch_run` 取数记录——不是数据源，只是取数凭据
     GET /api/fetch/status      取数状态（正在跑没 / 上次取数时刻 / 今天取过数没）
     GET /api/fetch/status?all=1  **一次刷全部活动**那一批的进度（哪个在跑 / 哪个跑完 / 跳过谁）
-    POST /api/fetch            **取数**：把昨天的数固定下来（默认区间＝到昨天，落取数流水）
+    POST /api/fetch            **取数**：把昨天的数固定下来（默认区间＝到昨天，写 `fetch_run`）
                                —— **一天只允许一次**（用户 2026-09-20 定：昨天不会再变，重复取没意义）
     POST /api/fetch?today=1    **刷新今天**：只查今天这一天（常驻浏览器后实测
                                首次 ≈1.8 秒、之后 0.9~1.1 秒），随时可以点
                                —— 两个模式共用「同时只跑一个」的闸，互不占用对方的配额；
-                               刷新**不落取数流水**（数据进台账库就够，免得一天堆一堆文件夹）
+                               刷新只写数据库，不生成文件
 
     用户 2026-10-09 定：**页面上的「刷新」「取数」= 一次把所有登记的活动都跑一遍**
     （`?all=1`，顺序 = 当前看的活动先跑）。理由：浏览器只有一只、取数本来就串行，
@@ -42,17 +48,15 @@
     （以上除 `/` 与页面资源外，都可以带 `?activity=<任务组名>`；不给 = 默认活动。
       「同时只跑一个」是**全局**的——浏览器只有一只；「今天已取」是**按活动**算的。）
 
-⚠ **一个 profile 只能一个进程用**：服务开着时浏览器归它，别再在命令行跑 `fetch_perf.py`、
-   也别跑 `wait_login.py`（会抢 `.browser-profile`）；要跑就先关掉这个窗口。
+⚠ 服务开着时照样可以在命令行跑 `fetch_perf.py`、`run_*.py`、`wait_login.py`——
+   它们挂的是同一只公共浏览器（`--headed` 会把公共浏览器切成有窗口，会重启一次）。
 
 用法：
-    .venv\\Scripts\\python.exe -u web/app.py [--config activities/{活动名}/配置/{品牌}{负责人}.yaml]
-    ... --port 8770      # 默认 8770（只本机）；--host 0.0.0.0 才允许同局域网其他机器访问
-    ... --db 别的.db     # 换台账库（默认 activities/_db/投放数据.db）
+    .venv\\Scripts\\python.exe -u web/app.py
+    ... --port 8770      # 首选 8770（只本机）；占用时自动向后寻找；--host 0.0.0.0 才允许同局域网其他机器访问
+    ... --db 别的.db     # 换数据库（默认 activities/_db/投放数据.db）
     ... --auto 30        # 自动刷新间隔（分钟；默认 30，给 0 关掉）
-    （不给 --config 就登记 `activities/*/配置/*.yaml` 下的**全部**活动；
-      给了就是"只登记这一个"——以前只认得一个活动，现在它降级成筛选器）
-    懒得敲命令就双击 `web/start.bat`。
+    懒得敲命令就双击 `web/start-hidden.vbs`。
 
 用户 2026-09-28 定：**服务自己定时刷新**（`--auto`，默认 30 分钟）——
 每天第一次先跑一次「取数」（把**昨天**的终值固定下来，只刷今天的话昨天那行会永远停在半截），
@@ -83,8 +87,9 @@ sys.path.insert(0, str(REPO / "automation" / "scripts"))
 
 import campaign as campaign_mod  # noqa: E402
 import fetch_perf as fetch_mod   # noqa: E402
-import perf_db  # noqa: E402
-import perf_payload as pp  # noqa: E402
+import runtime_state  # noqa: E402
+import workspace_payload as wp  # noqa: E402
+import workspace_repo as workspace_repo  # noqa: E402
 
 CTYPE = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "application/javascript; charset=utf-8"}
@@ -93,11 +98,14 @@ CTYPE = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
 ACTIVITIES = {}             # 任务组名 -> {"id","label","cfg","cfg_path","activity_dir","data_root"}
 DB_PATH = None              # 台账库：**全活动共用一份**（schema 本来就带活动维度）
 DEFAULT_ID = None           # 页面不给 ?activity= 时用哪个活动
+ACTUAL_PORT = None
+SERVICE_NAME = "ad_management-board"
+STARTED_AT = None
 
 # 取数任务状态：**每个活动一份**（页面轮询它）；取数本身仍是全局串行（浏览器只有一只）
 FETCH = {}
 JOBS = queue.Queue()        # 取数线程的任务队列，元素 = (活动id, 模式)（一次只跑一个）
-BROWSER = None              # 常驻浏览器；**只有取数线程碰它**（playwright 同步接口不能跨线程）
+BROWSER = None              # 取数线程那只连接（挂在公共浏览器上）；**只有取数线程碰它**
 
 # 自动刷新（2026-09-28 用户定：每 30 分钟；服务得有人开着）
 #   每天**第一次**先跑一次「取数」（默认区间 = 最近有数据那天 ~ 昨天，把昨天的终值固定下来），
@@ -106,23 +114,12 @@ BROWSER = None              # 常驻浏览器；**只有取数线程碰它**（p
 AUTO = {"minutes": 30, "at": {}}    # minutes=0 关掉；at[活动] = 上次自动跑的时刻
 AUTO_STEP = 30                      # 计时线程每 30 秒醒一次看该不该跑（不值当为它精算）
 
-# 「活动收尾」标记（2026-10-12 用户定）：活动根下有 `已结束.md` 的活动**不再参加整批刷新**——
-#   活动投完了、判定也停了（巡检那边同一条标记），登记表里照常留着（页面能看历史）；
-#   要看 / 要补就切到它单独点「取数」（那是人明确要的）。
+# 活动生命周期以数据库 `activity.status` / `ended_on` 为准。已收尾活动不再参加整批刷新、
+# 待复盘和自动复盘；登记表里照常留着（页面能看历史），要看历史仍可切过去。
 #   补数窗口（同日用户定 N=2）：收尾日之后**再自动补 2 天**——后台数据回传有延迟，收尾那行
 #   当天取到的是半截的，隔天重取才是终值。窗口内仍算"在跑"（自动刷新照跑、角标照算），
 #   窗口外才彻底停。
-ENDED_MARKER = "已结束.md"
-# 只认「收尾日：2026-10-12」这种**标签紧跟日期**的写法：正文里顺嘴提到的
-# 「收尾日 + 2 天，本例 2026-10-14」不能被抓成收尾日（那会把窗口整体往后挪）。
-ENDED_DAY_RE = re.compile(r"收尾日\*{0,2}\s*[：: ]\s*(\d{4}-\d{2}-\d{2})")
 ENDED_GRACE_DAYS = 2
-
-# /api/todo（跨活动的「到门槛 · 没复盘」清单）的结果缓存：弹窗可能连点，
-# 而每算一次要把**每个活动**的 payload 都装配一遍。60 秒足够新，坏处是刚取完数
-# 可能还看得到上一份（最多 1 分钟），代价比"每次点击全量重算"小得多。
-TODO_CACHE = {"at": 0.0, "payload": None}
-TODO_TTL = 60
 
 # 「一次刷所有活动」的那一批（2026-10-09 用户定）：页面点刷新 / 取数 = 登记的活动全跑一遍。
 # 这里只记"这一批点了谁、什么模式、什么时候点的"；每个活动的进度仍从 `FETCH` 现读——
@@ -144,6 +141,30 @@ def activity(aid=None):
     return ACTIVITIES.get(aid)
 
 
+def refresh_activity_statuses():
+    """从数据库刷新活动生命周期；运行中的服务不必因启停而重启。"""
+    global DEFAULT_ID
+    if not ACTIVITIES:
+        return
+    conn = workspace_repo.connect(DB_PATH)
+    try:
+        rows = workspace_repo.list_activities(conn)
+    finally:
+        conn.close()
+    by_id = {row["id"]: row for row in rows}
+    for item in ACTIVITIES.values():
+        row = by_id.get(item["db_id"])
+        if row:
+            item["ended"] = row["status"] == "ended"
+            item["endedDay"] = row["ended_on"]
+    if DEFAULT_ID in ACTIVITIES and ACTIVITIES[DEFAULT_ID].get("ended"):
+        DEFAULT_ID = next(
+            (aid for aid, item in ACTIVITIES.items()
+             if not item.get("ended") and db_state(item)["days"]),
+            DEFAULT_ID,
+        )
+
+
 def pick(query):
     """`?activity=` 里的活动 → (登记项, 请求里写的那个名字)；没给就用默认活动。"""
     wanted = (query.get("activity") or [""])[0] or DEFAULT_ID
@@ -155,41 +176,39 @@ def flag(query, name):
     return (query.get(name) or ["0"])[0] in ("1", "true", "yes")
 
 
-def snap_time(name):
-    """快照文件夹名 `2026-09-17_0944` → `2026-09-17 09:44`。"""
-    if not name or "_" not in name:
-        return name or ""
-    d, t = name.split("_", 1)
-    t = t.split("_")[0]
-    return "%s %s:%s" % (d, t[:2], t[2:4]) if len(t) >= 4 else "%s %s" % (d, t)
-
-
 def snapshot_names(item):
-    return [p.name for p in pp.snapshots(item["data_root"])] if item.get("data_root") else []
-
+    """取数凭据：数据库 v2 的 `fetch_run`。"""
+    conn = workspace_repo.connect(DB_PATH)
+    try:
+        runs = workspace_repo.list_fetch_runs(conn, item["db_id"])
+    finally:
+        conn.close()
+    return [r["finished_at"] or r["started_at"] for r in reversed(runs)]
 
 def last_fetch(item):
-    """最近一次**取数**的流水文件夹名（「刷新今天」不落流水，所以流水里只有取数）。"""
+    """最近一次成功取数的时间。"""
     names = snapshot_names(item)
     return names[-1] if names else None
 
 
 def today_fetched(item):
-    """今天是否已经**取过数**（＝写过一份不带标签的今天流水）。
-
-    「刷新今天」写的是带标签的那种，不算数——否则点一次刷新就把当天的取数配额吃掉了。
-    配额是**按活动**算的：给 KIRO 取数不吃火山的额度。
-    """
-    last = last_fetch(item)
-    return last if (last and last.startswith(datetime.date.today().isoformat())) else None
+    """今天是否已经跑过写入终值的完整取数。"""
+    conn = workspace_repo.connect(DB_PATH)
+    try:
+        row = workspace_repo.full_fetch_on(
+            conn, item["db_id"], datetime.date.today().isoformat()
+        )
+    finally:
+        conn.close()
+    return row["started_at"] if row else None
 
 
 def db_state(item):
     """库内数据到哪天、有多少天（页头要显示"数据截止"，也用来判断要不要先取数）。"""
     try:
-        conn = perf_db.connect(DB_PATH)
+        conn = workspace_repo.connect(DB_PATH)
         try:
-            ds = perf_db.days(conn, item["id"])
+            ds = workspace_repo.activity_days(conn, item["db_id"])
         finally:
             conn.close()
     except Exception as e:
@@ -200,42 +219,39 @@ def db_state(item):
 def fetch_state(item):
     """一个活动的取数状态（页面轮询用）。`busy` = 别的活动正在取数（取数是串行的）。"""
     st = FETCH.setdefault(item["id"], new_fetch_state())
-    last = last_fetch(item)
-    done = today_fetched(item)
+    today = datetime.date.today().isoformat()
+    conn = workspace_repo.connect(DB_PATH)
+    try:
+        last = workspace_repo.last_successful_fetch(conn, item["db_id"])
+        state = db_state(item)
+        done = workspace_repo.full_fetch_on(conn, item["db_id"], today)
+        today_all = all(
+            other.get("ended") or
+            workspace_repo.full_fetch_on(conn, other["db_id"], today) is not None
+            for other in ACTIVITIES.values()
+        )
+    finally:
+        conn.close()
     busy = running_activity()
     at = AUTO["at"].get(item["id"])
-    return {"running": st["running"], "mode": st["mode"],
-            "started": st["started"], "finished": st["finished"],
-            "ok": st["ok"], "snapshot": st["snapshot"], "error": st["error"],
-            "lines": list(st["lines"])[-40:],
-            "activity": item["id"],
-            "by": st["by"],                       # manual（页面点的）/ auto（自动刷新）
-            "auto": {"minutes": AUTO["minutes"], "at": at.strftime("%H:%M:%S") if at else None,
-                     "ok": st["ok"] if st["by"] == "auto" else None},
-            "busy": bool(busy and busy != item["id"]),
-            "busyWith": busy if busy != item["id"] else None,
-            "lastFetch": last, "lastFetchTime": snap_time(last), "db": db_state(item),
-            "todayDone": bool(done), "todayFetch": done,
-            # 「取数」按钮看 todayDoneAll（2026-10-09 起取数是**一次刷全部活动**）：
-            # 只按当前活动算的话，会出现"按钮说今天已取、其实另一个活动还没取"。
-            "todayDoneAll": bool(ACTIVITIES) and today_fetched_all()}
-
-
-def ended_day(activity_dir):
-    """`已结束.md` 里那行「收尾日：YYYY-MM-DD」的日子。
-
-    没有这个日期（老标记 / 手写漏了）→ `None` = 不补数、立即停：宁可不动它，
-    也别一直去碰一个已经收尾的活动。
-    """
-    try:
-        text = (Path(activity_dir) / ENDED_MARKER).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        m = ENDED_DAY_RE.search(line)
-        if m:
-            return m.group(1)
-    return None
+    return {
+        "running": st["running"], "mode": st["mode"],
+        "started": st["started"], "finished": st["finished"],
+        "ok": st["ok"], "snapshot": st["snapshot"], "error": st["error"],
+        "lines": list(st["lines"])[-40:],
+        "activity": item["id"], "by": st["by"],
+        "auto": {"minutes": AUTO["minutes"],
+                 "at": at.strftime("%H:%M:%S") if at else None,
+                 "ok": st["ok"] if st["by"] == "auto" else None},
+        "busy": bool(busy and busy != item["id"]),
+        "busyWith": busy if busy != item["id"] else None,
+        "lastFetch": last["finished_at"] if last else None,
+        "lastFetchTime": last["finished_at"] if last else "",
+        "db": state, "todayDone": bool(done),
+        "todayFetch": done["started_at"] if done else None,
+        "todayDoneAll": today_all,
+        "readOnly": False,
+    }
 
 
 def ended_until(item):
@@ -268,11 +284,6 @@ def today_fetched_all():
     return all(today_fetched(it) for it in live)
 
 
-def invalidate_todo():
-    """新数进库 → 待复盘清单作废（用户 2026-10-09：刷新 / 取数完角标必须跟着变）。"""
-    TODO_CACHE["at"], TODO_CACHE["payload"] = 0.0, None
-
-
 def running_activity():
     """当前正在取数的活动（取数串行：浏览器只有一只，所以最多一个）。"""
     for aid, st in FETCH.items():
@@ -284,8 +295,9 @@ def running_activity():
 def activities_payload():
     """活动登记表（页面切换器用）；顺序 = 登记顺序 = 配置路径排序，稳定不变。"""
     return {"default": DEFAULT_ID,
-            "activities": [{"id": it["id"], "label": it["label"], "dir": it["activity_dir"],
-                            "cfgPath": it["cfg_path"], "db": db_state(it),
+            "activities": [{"id": it["id"], "label": it["label"],
+                            "dir": it.get("activity_dir", ""),
+                            "cfgPath": it.get("cfg_path", ""), "db": db_state(it),
                             "ended": bool(it.get("ended"))}
                            for it in ACTIVITIES.values()]}
 
@@ -295,7 +307,7 @@ def todo_payload():
 
     为什么在服务端算：页面一次只加载一个活动（`/api/perf` 按 `?activity=` 给），
     「所有活动合计」只有服务端知道谁是全部活动。
-    规则本体在 `perf_payload.todo_rows()`——与 `/api/perf` 共用同一套判定
+    规则本体在 `workspace_payload.todo_rows()`——与 `/api/perf` 共用同一套判定
     （`judging.py`），不在页面里另抄一份（口径抄第二遍迟早跟第一份走散）。
     算不出来的活动（库里还没数据 / YAML 坏了）**跳过并打一行**，不让一个活动拖垮整份清单。
 
@@ -303,32 +315,19 @@ def todo_payload():
     "只有一部分活动是新数"的样子，缓存了会给页面看半分钟旧清单（页面角标显示 1、
     表格里明明有三条，就是这么来的）。取数线程每跑完一个活动会 `invalidate_todo()`。
     """
-    now = time.time()
-    running = running_activity() is not None
-    if not running and TODO_CACHE["payload"] is not None and now - TODO_CACHE["at"] < TODO_TTL:
-        return TODO_CACHE["payload"]
     items = []
-    for item in ACTIVITIES.values():
-        try:
-            conn = perf_db.connect(DB_PATH)
-            try:
-                if not perf_db.days(conn, item["id"]):
-                    continue
-                rows = pp.todo_rows(pp.build_payload(item["cfg"], conn,
-                                                     config_path=item["cfg_path"]))
-            finally:
-                conn.close()
-        except Exception as e:
-            print("  ! 待复盘清单：%s 跳过（%s）" % (item["id"], e), flush=True)
-            continue
-        items.extend(rows)
-    # 攒得最满的排前面（曝光 ÷ 门槛），同样满就看工单名——顺序稳定，页面不用再排
-    items.sort(key=lambda r: (-(r["exposure"] / r["threshold"]) if r["threshold"] else 0, r["task"]))
-    out = {"count": len(items), "items": items,
-           "generated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
-    if not running:                      # 取数中途的清单不进缓存（下一问重算就是新的）
-        TODO_CACHE["at"], TODO_CACHE["payload"] = now, out
-    return out
+    conn = workspace_repo.connect(DB_PATH)
+    try:
+        for item in ACTIVITIES.values():
+            if not item.get("ended"):
+                items.extend(wp.todo_rows(conn, item["db_id"]))
+    finally:
+        conn.close()
+    items.sort(key=lambda r: (-(r["exposure"] / max(r["threshold"], 1)),
+                              r["activity"], r["bucket"]))
+    return {"count": len(items),
+            "generated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "items": items}
 
 
 def auto_action(item, now=None):
@@ -337,7 +336,7 @@ def auto_action(item, now=None):
     - **今天没取过数** → 先跑一次「取数」：默认区间补到昨天，把昨天的终值固定下来（一天一次）；
     - 之后按 `AUTO["minutes"]` 的间隔刷「今天」的实时数（随时可点的那种，不落流水）；
     - 到没到点看 `AUTO["at"]`（**本活动上次自动跑的时刻**）——手动点过不该让自动刷新停摆；
-    - **活动收尾**（根下有 `已结束.md`）→ 只在「收尾日 + 2 天」补数窗口内继续自动补，
+    - **活动收尾**（数据库 `activity.status='ended'`）→ 只在「收尾日 + 2 天」补数窗口内继续自动补，
       过了窗口不再自动刷新（2026-10-12）；
     - `AUTO["minutes"] = 0` = 关掉。
     """
@@ -401,27 +400,30 @@ def fetch_error(e):
 
 
 def _fetch_job(item, mode):
-    """真正跑一次取数：`today`＝只查今天（不落流水）/ `full`＝默认区间补到昨天（落流水）。"""
-    args = (item["cfg"], str(item["cfg_path"]), str(DB_PATH))
+    """真正跑一次取数：`today`＝只查今天 / `full`＝默认区间补到昨天。
+
+    **两者都不落 CSV 流水**（2026-10-14 起默认不落）：取数事件和指标都写入数据库 v2。
+    """
     if mode == "today":
         today = datetime.date.today().isoformat()
-        fetch_mod.run(*args, date_from=today, date_to=today, no_archive=True,
+        fetch_mod.run(item["id"], v2_db_path=DB_PATH, date_from=today, date_to=today,
                       note=fetch_note(item["id"]), browser=BROWSER)
     else:
-        fetch_mod.run(*args, note=fetch_note(item["id"]), browser=BROWSER)
+        fetch_mod.run(item["id"], v2_db_path=DB_PATH,
+                      note=fetch_note(item["id"]), browser=BROWSER)
 
 
 def fetch_worker():
-    """取数线程：**独占**那只常驻浏览器，任务从队列里来（playwright 同步接口不能跨线程）。
+    """取数线程：**独占**那一条浏览器连接，任务从队列里来（playwright 同步接口不能跨线程）。
 
-    起服务时就把浏览器拉起来（用户要的：双击 start.bat 就起、关窗口才关）；拉不起来也不算完蛋——
-    第一次点刷新会再试一次，出过错的浏览器不留着，直接扔掉重开。
+    起服务时就把公共浏览器拉起来（用户要的：双击 start-hidden.vbs 就起）；拉不起来也不算完蛋——
+    第一次点刷新会再试一次。出错的连接不留着，直接断开重挂（**浏览器本身不关**，别的程序还在用）。
     """
     global BROWSER
     BROWSER = fetch_mod.Browser()
     try:
         BROWSER.start()
-        print("  浏览器：已就绪（常驻；刷新 / 取数都复用它，关窗口才关）", flush=True)
+        print("  浏览器：已挂上公共浏览器（刷新 / 取数都复用它；关本窗口不关它）", flush=True)
     except Exception as e:
         print("  ! 浏览器：没起来（点第一次刷新时会再试）：%s" % e, flush=True)
         BROWSER.close()
@@ -438,14 +440,14 @@ def fetch_worker():
         except Exception as e:
             st["ok"] = False
             st["error"] = fetch_error(e)
-            BROWSER.close()                    # 出过错的浏览器不留：下一次重开一只
+            BROWSER.close()                    # 断开这条连接；下一次重挂（不关浏览器）
             traceback.print_exc()              # 详细堆栈打到服务窗口，方便回头查
         finally:
             st["running"] = False
             st["finished"] = datetime.datetime.now().strftime("%H:%M:%S")
-            invalidate_todo()          # 新数进库 → 待复盘清单作废（角标别停在旧数字上）
     BROWSER.close()
-    print("  浏览器：已关闭", flush=True)
+    print("  浏览器：已断开连接（公共浏览器留着给别的程序用；要关：browser_broker.py --stop）",
+          flush=True)
 
 
 def batch_state():
@@ -601,6 +603,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, p.read_bytes(), CTYPE.get(p.suffix, "application/octet-stream"))
 
     def do_GET(self):
+        refresh_activity_statuses()
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == "/favicon.ico":
@@ -614,6 +617,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if u.path == "/api/activities":
             self._json(200, activities_payload())
+            return
+        if u.path == "/api/health":
+            self._json(200, {
+                "service": SERVICE_NAME,
+                "pid": os.getpid(),
+                "port": ACTUAL_PORT,
+                "db": DB_PATH,
+                "started": STARTED_AT,
+            })
             return
         if u.path == "/api/todo":                 # 跨活动：不吃 ?activity=，就在 pick() 之前拦下来
             self._json(200, todo_payload())
@@ -630,14 +642,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"activity": item["id"], "snapshots": snapshot_names(item)})
             return
         if u.path == "/api/perf":
-            conn = perf_db.connect(DB_PATH)
+            conn = workspace_repo.connect(DB_PATH)
             try:
-                if not perf_db.days(conn, item["id"]):
-                    self._json(503, {"activity": item["id"],
-                                     "error": "台账库里还没有这个活动的数据（%s），"
-                                              "点右上角「取数」跑一次 fetch_perf.py" % item["label"]})
-                    return
-                self._json(200, pp.build_payload(item["cfg"], conn, config_path=item["cfg_path"]))
+                self._json(200, wp.build_payload(conn, item["db_id"]))
             finally:
                 conn.close()
             return
@@ -649,6 +656,7 @@ class Handler(BaseHTTPRequestHandler):
                    "text/plain; charset=utf-8")
 
     def do_POST(self):
+        refresh_activity_statuses()
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path == "/api/fetch":
@@ -691,83 +699,112 @@ class BoardServer(ThreadingHTTPServer):
     allow_reuse_address = (os.name != "nt")
 
 
+def serve_v2(args):
+    """数据库 v2 单库运行：读取、取数和复盘都走同一个库。"""
+    global DB_PATH, DEFAULT_ID, ACTUAL_PORT, STARTED_AT
+    existing = runtime_state.read_state("board")
+    if existing:
+        try:
+            current = runtime_state.get_json(
+                "http://127.0.0.1:%d/api/health" % int(existing["port"])
+            )
+        except Exception:
+            current = {}
+        if (
+            current.get("service") == SERVICE_NAME
+            and int(current.get("pid") or 0) == int(existing.get("pid") or 0)
+            and runtime_state.process_matches(
+                int(existing.get("pid") or 0), [str(REPO), "app.py"]
+            )
+        ):
+            print("看板服务已经在运行：http://127.0.0.1:%s/" % existing["port"], flush=True)
+            return
+    DB_PATH = args.db
+    AUTO["minutes"] = max(0, int(args.auto))
+    conn = workspace_repo.connect(DB_PATH)
+    try:
+        rows = workspace_repo.list_activities(conn)
+    finally:
+        conn.close()
+    if not rows:
+        raise SystemExit("v2 库里没有活动：%s" % DB_PATH)
+    try:
+        found = campaign_mod.discover(REPO / "activities")
+        configs = {it["id"]: it for it in found}
+    except Exception as e:
+        raise SystemExit("活动 YAML 登记失败：%s" % e)
+    for row in rows:
+        aid = row["activity_key"]
+        matched = configs.get(aid)
+        ACTIVITIES[aid] = {
+            "id": aid, "db_id": row["id"], "label": row["display_name"],
+            "cfg": matched["cfg"] if matched else {},
+            "cfg_path": matched["cfg_path"] if matched else "",
+            "activity_dir": matched["activity_dir"] if matched else "",
+            "data_root": None,
+            "ended": row["status"] == "ended", "endedDay": row["ended_on"],
+        }
+        FETCH[aid] = new_fetch_state()
+    DEFAULT_ID = next(
+        (aid for aid, item in ACTIVITIES.items()
+         if not item.get("ended") and db_state(item)["days"]),
+        next((aid for aid, item in ACTIVITIES.items() if db_state(item)["days"]),
+             rows[0]["activity_key"]),
+    )
+
+    print("看板服务已启动（数据库 v2 单库）：", flush=True)
+    print("  v2 库：%s" % DB_PATH, flush=True)
+    for aid, item in ACTIVITIES.items():
+        state = db_state(item)
+        print("  活动：%s（%s）—— 库内 %d 天，%s ~ %s%s" % (
+            item["label"], aid, state["days"], state["first"] or "—",
+            state["last"] or "—", "（默认）" if aid == DEFAULT_ID else "",
+        ), flush=True)
+    server = None
+    last_error = None
+    for port in range(args.port, args.port + 100):
+        try:
+            server = BoardServer((args.host, port), Handler)
+            break
+        except OSError as exc:
+            last_error = exc
+    if server is None:
+        raise SystemExit("  起不来：从 %s:%d 起 100 个端口都无法监听。原始报错：%s" %
+                         (args.host, args.port, last_error))
+    ACTUAL_PORT = int(server.server_address[1])
+    STARTED_AT = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    runtime_state.write_state("board", {
+        "service": SERVICE_NAME,
+        "pid": os.getpid(),
+        "port": ACTUAL_PORT,
+        "host": args.host,
+        "db": DB_PATH,
+        "started": STARTED_AT,
+    })
+    print("  打开：http://%s:%d/" % (args.host, ACTUAL_PORT), flush=True)
+    worker = threading.Thread(target=fetch_worker, name="fetch", daemon=True)
+    worker.start()
+    threading.Thread(target=auto_worker, name="auto", daemon=True).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  收到退出：断开 v2 取数连接，收工…", flush=True)
+    finally:
+        runtime_state.clear_state("board", pid=os.getpid())
+        JOBS.put(None)
+        worker.join(timeout=10)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default=None,
-                    help="只登记这一个整活动 YAML（不给就登记 activities/*/配置/*.yaml 下的全部活动）")
-    ap.add_argument("--db", default=perf_db.DEFAULT_DB, help="台账库路径（默认 activities/_db/投放数据.db）")
-    ap.add_argument("--port", type=int, default=8770, help="监听端口（默认 8770）")
+    ap.add_argument("--db", default=workspace_repo.V2_DB, help="数据库 v2 路径")
+    ap.add_argument("--port", type=int, default=8770, help="首选端口（默认 8770，占用时自动向后寻找）")
     ap.add_argument("--host", default="127.0.0.1", help="监听地址（默认只本机；0.0.0.0 = 同局域网可访问）")
     ap.add_argument("--auto", type=int, default=30,
                     help="自动刷新间隔（分钟；默认 30，**给 0 就关掉**）。每天第一次先跑一次「取数」把昨天固定下来")
     a = ap.parse_args()
 
-    global DB_PATH, DEFAULT_ID
-    DB_PATH = a.db
-    AUTO["minutes"] = max(0, int(a.auto))
-    skipped = []                           # 非整活动 YAML（活动定义 / 判定门槛 / *.thresholds …）的跳过明细
-    try:
-        found = campaign_mod.discover(REPO / "activities", only=a.config,
-                                      log=skipped.append)   # 先收着，等标题打完再总结成一行
-    except Exception as e:
-        raise SystemExit("活动登记失败：%s" % e)
-    if not found:
-        raise SystemExit("没找到活动配置（activities/*/配置/*.yaml），请用 --config 指定")
-
-    perf_db.connect(DB_PATH).close()        # 库不存在就建空库；页面上点「取数」即可有数据
-    for it in found:
-        d = Path(it["activity_dir"]) / "数据"
-        it["data_root"] = str(d) if d.is_dir() else None
-        it["ended"] = (Path(it["activity_dir"]) / ENDED_MARKER).is_file()
-        it["endedDay"] = ended_day(it["activity_dir"]) if it["ended"] else None
-        ACTIVITIES[it["id"]] = it
-        FETCH[it["id"]] = new_fetch_state()
-    # 默认活动优先挑「库里有数据的那个」：新活动刚建、还没取过数时，一打开就是个空页面
-    DEFAULT_ID = next((it["id"] for it in found if db_state(it)["days"]), found[0]["id"])
-
-    print("看板服务已启动（只读；关掉这个窗口或 Ctrl+C 就停）：", flush=True)
-    print("  台账：%s" % DB_PATH, flush=True)
-    for it in found:
-        st = db_state(it)
-        if not it.get("ended"):
-            tail = ""
-        elif fetch_stopped(it):
-            tail = "（已收尾：不再自动取数）"
-        else:
-            tail = "（已收尾：自动补数到 %s）" % ended_until(it)
-        print("  活动：%s（%s）—— 库内 %d 天，%s ~ %s%s%s"
-              % (it["label"], it["id"], st["days"], st["first"] or "—", st["last"] or "—",
-                 "（默认）" if it["id"] == DEFAULT_ID else "", tail), flush=True)
-    if skipped:                             # 一行说完：别把 6 行绝对路径糊在标题前面
-        names = sorted({Path(s[3:].split("：", 1)[0].strip()).name
-                        for s in skipped if s.startswith("跳过 ")})
-        print("  跳过：%d 个非整活动 YAML（%s）——只登记整活动 YAML"
-              % (len(skipped), "、".join(names) or "明细见日志"), flush=True)
-    print("  打开：http://%s:%d/    取数流水落 activities/{活动名}/数据/" % (a.host, a.port), flush=True)
-    print("  接口：/api/activities、/api/perf、/api/snapshots、/api/fetch/status、POST /api/fetch"
-          "（都带 ?activity=…）；/api/todo（跨活动，不带）", flush=True)
-    print("  取数：常驻浏览器（起一只反复用；跨活动串行；关窗口时一起关）｜自动刷新：%s"
-          % ("每 %d 分钟一次（每天第一次先「取数」固定昨天）" % AUTO["minutes"]
-             if AUTO["minutes"] else "已关闭（--auto 0）"), flush=True)
-    print("  " + "─" * 52 + "（下面只打：取数结果 / 自动刷新 / 出错）", flush=True)
-    # 端口**先绑上、再起浏览器**（2026-10-12）：绑不上就直接退出——绝不能在端口被占的情况下
-    # 还去起那只常驻浏览器，它会抢同一个 `.browser-profile`，把正在跑的那个看板搞成"浏览器起不来"。
-    try:
-        server = BoardServer((a.host, a.port), Handler)
-    except OSError as e:
-        raise SystemExit("  起不来：%s:%d 已经被占用——多半是**已经有一个看板在跑**"
-                         "（去关掉那个窗口 / 结束那个进程；一个登录 profile 同时只能被一个进程用）。\n"
-                         "  原始报错：%s" % (a.host, a.port, e))
-    worker = threading.Thread(target=fetch_worker, name="fetch", daemon=True)
-    worker.start()                 # 浏览器在它里面起来（起不来也不挡看板）
-    threading.Thread(target=auto_worker, name="auto", daemon=True).start()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n  收到退出：关掉常驻浏览器，收工 …", flush=True)
-    finally:
-        JOBS.put(None)             # 让取数线程收工（它在里面关浏览器）
-        worker.join(timeout=10)
+    serve_v2(a)
 
 
 if __name__ == "__main__":

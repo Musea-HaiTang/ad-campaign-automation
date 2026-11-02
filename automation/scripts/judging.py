@@ -9,35 +9,19 @@
    **点击并列时看点击率，再并列看曝光**——用户 2026-10-09 定。以前并列时按读数顺序，
    等于让后台列表谁排前面谁留下（出现过"1 击 / 0.08% 的被下、1 击 / 0.07% 的留下"）。
 
+⚠ 2026-10-21 起，脚本只判断"谁有击、谁可判"；具体走首测 / 补验还是
+  摘要小改，由复盘按 `想法池与1000曝光复盘流程.md` 和 `小改流程.md` 决定。
+
 谁在用：
   - `judge_batch.py`：出「留谁 / 下谁 / 下一轮补几条新文案」的清单（命令行 / 定时巡检）；
-  - `perf_payload.py`：把**同一套**结论交给看板（页面那三列：当前曝光 / 门槛 / 建议动作）。
+  - `workspace_payload.py`：把**同一套**结论交给看板（页面那三列：当前曝光 / 门槛 / 建议动作）。
 
 规则只在这里写一次（2026-09-28 收口）：以前这套「门槛 → 有击留、无击下、空位补新文案」的逻辑
 只活在 judge_batch 里，看板要用就得抄一遍——抄出来的第二份迟早跟第一份走散。
 
-纯函数：不读文件、不碰库、不连后台（测试见 `tests/test_judge_batch.py`，两个入口共用一套断言）。
+纯函数：不读文件、不碰库、不连后台（测试见 `tests/test_judging.py`）。
 """
 import math
-import re
-
-
-def bucket_of(task_name):
-    """工单名 → 桶 id（`…-A类` → `A`）；认不出来返回空串。"""
-    m = re.search(r"-([A-Z])类", task_name or "")
-    return m.group(1) if m else ""
-
-
-def next_batch(batch):
-    """批次后缀 +1：`-6` → `-7`。
-
-    名字里的数字是"第几批"（-4 → -5 → -6，**越大越新**），所以是**绝对值 +1**、不是整数 +1——
-    写成 `str(int(batch) + 1)` 会得到 `-5`（指向上一批，而且那一批已经下过线了）。
-    """
-    tail = str(batch or "").lstrip("-")
-    if not tail.isdigit():
-        return "?"
-    return ("-" if str(batch or "").startswith("-") else "") + str(int(tail) + 1)
 
 
 def _rank(x):
@@ -84,7 +68,7 @@ def judge_one(task_name, spec, pass_ctr, rows):
         out["state"] = "**达标**（CTR ≥千三）"
         out["conclusion"] = "转长期单：留有点击的 %d 条，不补新文案" % len(keep)
     else:
-        out["state"], out["conclusion"] = "过门槛 · 未达标", "有击留、无击下，补新文案"
+        out["state"], out["conclusion"] = "过门槛 · 未达标", "按首测 / 补验 / 摘要小改流程处理"
     out["keep"] = [x["resource_name"] for x in keep]
     out["drop"] = [x["resource_name"] for x in rows if x["resource_name"] not in out["keep"]]
     out["new_copy"] = 0 if out["pass"] else slots - len(keep)

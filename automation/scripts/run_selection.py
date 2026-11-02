@@ -9,7 +9,7 @@
 
 用法：
     .venv\\Scripts\\python.exe -u automation/scripts/run_selection.py ^
-        --config activities/火山引擎MediaKit/调整/2026-09-17-D桶换词重投.yaml ^
+        --config "<当前执行 YAML>" ^
         --only D --headed              # 彩排（默认）：只到「导出卡片出现」为止
     ... 同上 + --submit                 # 真导出，落 CSV
     ... 同上 + --refresh                # 本地已有当天 CSV 也强制重取
@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bucket_runner  # noqa: E402
 import cli  # noqa: E402
 import csdn_ui as ui  # noqa: E402
+import workspace_repo as repo  # noqa: E402
 
 CHAT = "https://data.csdn.net/chat"
 EXPORT_API = "https://data.csdn.net/api"
@@ -134,20 +135,17 @@ def summarize(text):
     return n, total, (total / n if n else 0.0)
 
 
-RECORD_HEAD = ("| 导出时间 | 桶 | 关键词数 | 博文数 | 总点击数 | 平均点击数 | CSV |\n"
-               "|---|---|---|---|---|---|---|\n")
-
-
-def append_record(path, when, bucket, kw_count, n, total, avg, csv_name):
-    """把这次圈选的读数追加成一行（文件不存在就写表头）。"""
-    new = not os.path.exists(path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        if new:
-            fh.write("# 圈选记录（每次导出追加一行，`run_selection.py` 自动写）\n\n")
-            fh.write(RECORD_HEAD)
-        fh.write("| %s | %s | %d | %s | %s | %.1f | %s |\n"
-                 % (when, bucket, kw_count, "{:,}".format(n), "{:,}".format(total), avg, csv_name))
+def record_selection(activity_key, bucket_key, when, kw_count, n, total, db_path):
+    """把一次圈选结果写入数据库。"""
+    conn = repo.connect(db_path)
+    try:
+        activity = repo.get_activity(conn, activity_key)
+        if activity is None:
+            raise RuntimeError("数据库里没有活动：%s" % activity_key)
+        return repo.save_selection_run(
+            conn, activity["id"], str(bucket_key), when, kw_count, n, total)
+    finally:
+        conn.close()
 
 
 def ask_question(page, keywords, prompt):
@@ -238,7 +236,7 @@ def download_csv(page, st, path):
     with open(path, "w", encoding="utf-8-sig", newline="") as fh:
         fh.write(text)
     lines = text.splitlines()
-    n, total, avg = summarize(text)
+    n, total, _ = summarize(text)
     ui.log("  CSV 已落盘：%s" % path)
     ui.log("  表头：%s" % lines[0][:100])
     ui.log("  博文数 %s ｜ 总点击数 %s ｜ 平均 %s"
@@ -266,7 +264,7 @@ def export_csv(s, keywords, prompt, path):
     return path
 
 
-def run_parallel(s, auds, args, out_dir, prompt, parallel):
+def run_parallel(s, auds, args, out_dir, prompt, parallel, activity_key, v2_db):
     """一次开 N 个对话页并发跑（用户 2026-09-28 提：一次开三个没问题）。
 
     并发的是**等模型出「确认导出」卡片**那一段（单桶实测 40~150 秒）：先把 N 个问题都发出去，
@@ -287,7 +285,7 @@ def run_parallel(s, auds, args, out_dir, prompt, parallel):
         return []
     done = []
     for i in range(0, len(todo), parallel):
-        done += _parallel_chunk(s, todo[i:i + parallel], prompt)
+        done += _parallel_chunk(s, todo[i:i + parallel], prompt, activity_key, v2_db)
     return done
 
 
@@ -299,7 +297,7 @@ def _close_pages(pages):
             pass
 
 
-def _parallel_chunk(s, chunk, prompt):
+def _parallel_chunk(s, chunk, prompt, activity_key, v2_db):
     """一批：N 个桶同时发问 → 重叠等卡片 → 逐页点确认 → 交错轮询导出 → 抓 CSV。"""
     pages = {}
     ui.log("---- 并发批（%d 桶）：%s ----"
@@ -362,10 +360,9 @@ def _parallel_chunk(s, chunk, prompt):
             if st.get("status") == "done":
                 text = download_csv(pages[aid], st, path)
                 n, total, avg = summarize(text)
-                rec = os.path.join(os.path.dirname(path), "圈选记录.md")
-                append_record(rec, time.strftime("%Y-%m-%d %H:%M"), aid, len(kws), n, total, avg,
-                              os.path.basename(path))
-                ui.log("[%s] 台账已记：%s" % (aid, rec))
+                record_selection(activity_key, aid, time.strftime("%Y-%m-%d %H:%M"),
+                                 len(kws), n, total, v2_db)
+                ui.log("[%s] 圈选结果已写入数据库" % aid)
                 ui.log("[%s] ✅ 建名单：run_distribution_ids.py --csv \"%s\" --config <同一个 YAML> "
                        "--only %s --submit" % (aid, path, aid))
                 done.append(aid)
@@ -378,7 +375,7 @@ def _parallel_chunk(s, chunk, prompt):
     return done
 
 
-def do_one(s, camp, aud, args, out_dir, prefix):
+def do_one(s, camp, aud, args, out_dir, prefix, v2_db):
     aid = str(aud.get("id"))
     kws = keywords_of(aud)
     path = csv_path(out_dir, prefix)
@@ -395,10 +392,9 @@ def do_one(s, camp, aud, args, out_dir, prefix):
         return bucket_runner.steps_status([("圈选", "ok")])
     text = open(path, encoding="utf-8-sig").read()
     n, total, avg = summarize(text)
-    rec = os.path.join(os.path.dirname(path), "圈选记录.md")
-    append_record(rec, time.strftime("%Y-%m-%d %H:%M"), aid, len(kws), n, total, avg,
-                  os.path.basename(path))
-    ui.log("  台账已记：%s" % rec)
+    record_selection(camp["taskGroupName"], aid, time.strftime("%Y-%m-%d %H:%M"),
+                     len(kws), n, total, v2_db)
+    ui.log("  圈选结果已写入数据库")
     ui.log("  ✅ 数量满意的话，跑这一条建名单：")
     ui.log("     run_distribution_ids.py --csv \"%s\" --config <同一个 YAML> --only %s --suffix -N --submit"
            % (path, aid))
@@ -417,6 +413,7 @@ def main():
     ap.add_argument("--out", default="", help="--job 模式的 CSV 落盘路径")
     ap.add_argument("--parallel", type=int, default=1,
                     help="一次并发开几个对话页（默认 1 = 串行；用户 2026-09-28：一次开三个没问题）")
+    ap.add_argument("--v2-db", default=repo.V2_DB, help="数据库 v2 路径")
     args = ap.parse_args()
 
     ctx = cli.context(args, shots="selection_shots", progress="selection_progress.json")
@@ -440,11 +437,12 @@ def main():
                     raise RuntimeError("任务不是 done（%s），先别下" % st.get("status"))
                 text = download_csv(s.page, st, args.out)
                 if args.only and auds:
-                    n, total, avg = summarize(text)
-                    rec = os.path.join(os.path.dirname(args.out), "圈选记录.md")
-                    append_record(rec, time.strftime("%Y-%m-%d %H:%M"), str(auds[0]["id"]),
-                                  len(keywords_of(auds[0])), n, total, avg, os.path.basename(args.out))
-                    ui.log("  台账已记：%s" % rec)
+                    n, total, _ = summarize(text)
+                    record_selection(
+                        camp["taskGroupName"], str(auds[0]["id"]),
+                        time.strftime("%Y-%m-%d %H:%M"),
+                        len(keywords_of(auds[0])), n, total, args.v2_db)
+                    ui.log("  圈选结果已写入数据库")
         except Exception as e:
             cli.fatal(ctx, e)
         ui.log("RESULT: OK")
@@ -454,7 +452,9 @@ def main():
         with ctx.session(args) as s:
             if args.parallel > 1:
                 t0 = time.time()
-                done = run_parallel(s, auds, args, out_dir, prompt_of(args), args.parallel)
+                done = run_parallel(
+                    s, auds, args, out_dir, prompt_of(args), args.parallel,
+                    camp["taskGroupName"], args.v2_db)
                 ui.log("并发导出完成：成功 %d / 共 %d 桶 ｜ 用时 %.1f 秒"
                        % (len(done), len(auds), time.time() - t0))
                 cli.exit_with("OK" if len(done) == len(auds) else "HAS_WARN（部分桶没导出，重跑可补）",
@@ -463,7 +463,8 @@ def main():
                 auds,
                 lambda a: do_one(s, camp, a, args, out_dir,
                                  args.prefix or "%s_%s桶%d词_" % (time.strftime("%Y-%m-%d"),
-                                                                  a["id"], len(keywords_of(a)))),
+                                                                  a["id"], len(keywords_of(a))),
+                                 args.v2_db),
                 key_of=lambda a: "%s|%s" % (camp["taskGroupName"], a["id"]),
                 describe=lambda a: "[%s] %s" % (a["id"], a.get("topic") or a.get("taskName")),
                 progress=ctx.progress,

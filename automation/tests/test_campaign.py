@@ -8,8 +8,8 @@ import pathlib
 import itertools
 import os
 import shutil
+import datetime
 import sys
-import types
 import unittest
 
 import yaml
@@ -31,13 +31,15 @@ def good():
         "label": "测试hang-2类",
         "controls": {
             "channelType": "页面类",
-            "channel": "PC-博客-详情页-相关推荐T0",
-            "materialPath": ["静态广告", "信息流", "文本"],
+            "channel": "PC博客详情页-新模版-T0",
+            "materialPath": ["动态广告", "其它"],
+            "username": "lihang",
             "defaults": {"businessLine": "企业服务事业部", "isPopup": False},
             "fields": {
-                "title": {"placeholder": "请输入广告标题"},
-                "summary": {"placeholder": "请输入广告摘要", "type": "textarea"},
-                "link": {"placeholder": "请输入点击链接"},
+                "link": {"placeholder": "请输入URL解析"},
+                "title": {"placeholder": "解析自动生成标题"},
+                "username": {"placeholder": "解析自动生成用户名"},
+                "summary": {"placeholder": "解析自动生成描述", "type": "textarea"},
             },
         },
         "campaign": {
@@ -60,7 +62,7 @@ def good():
             "businessLine": "企业服务事业部",
             "taskGroup": "测试hang",
             "taskName": "测试hang-A类 · 主题A",
-            "channel": "PC-博客-详情页-相关推荐T0",
+            "channel": "PC博客详情页-新模版-T0",
             "abGroups": [{"label": "对照组", "resource": "测试hang-A类 · 对照", "weightPct": 34}],
             "price": 25,
             "deliveryDate": {"start": "2026-09-09", "end": "2026-09-11"},
@@ -86,6 +88,24 @@ class CampaignTest(unittest.TestCase):
         self.assertEqual(d["taskOrder"]["deliveryDate"]["mode"], "set_time")
         self.assertEqual((d["taskOrder"]["deliveryDate"]["timeStart"],
                           d["taskOrder"]["deliveryDate"]["timeEnd"]), (8, 23))
+
+    def test_动态广告必须写资源用户名(self):
+        d0 = good()
+        del d0["controls"]["username"]
+        errs = campaign.validate(d0)
+        self.assertTrue(any("controls.username" in e for e in errs), errs)
+
+        d0 = good()
+        del d0["controls"]["fields"]["username"]
+        errs = campaign.validate(d0)
+        self.assertTrue(any("controls.fields.username" in e for e in errs), errs)
+
+    def test_旧静态广告配置不强制资源用户名(self):
+        d0 = good()
+        d0["controls"]["materialPath"] = ["静态广告", "信息流", "文本"]
+        del d0["controls"]["username"]
+        del d0["controls"]["fields"]["username"]
+        self.assertEqual(campaign.validate(d0), [])
 
     def test_计费价格必填_不许静默补默认值(self):
         """2026-09-22 用户定：计费价格不再固定 → YAML 里不写就报错，
@@ -156,6 +176,11 @@ class CampaignTest(unittest.TestCase):
         errs = campaign.validate(d0)
         self.assertTrue(any("resources[0].title" in e for e in errs), errs)
 
+    def test_历史highlight字段仍可装载(self):
+        d0 = good()
+        d0["audiences"][0]["resources"][0]["highlight"] = "历史词"
+        self.assertEqual(campaign.validate(d0), [])
+
     def test_桶的resources可以是空列表(self):
         # 空列表 = 本桶本轮没有新建资源、全部复用现有资源（2026-09-29 起，
         # 首个实例是 -7 批的 E 桶「3 条全留、0 条新写」）
@@ -183,6 +208,17 @@ class CampaignTest(unittest.TestCase):
         self.assertTrue(any("audiance" in e for e in errs), errs)
         self.assertTrue(any("audiences" in e for e in errs), errs)
 
+    def test_活动状态支持已结束并带收尾日(self):
+        d0 = good()
+        d0["campaign"].update({"status": "ended", "endedAt": "2026-10-22"})
+        self.assertEqual(campaign.validate(d0), [])
+
+    def test_活动状态写错要报错(self):
+        d0 = good()
+        d0["campaign"]["status"] = "offline"
+        errs = campaign.validate(d0)
+        self.assertTrue(any("campaign.status" in e for e in errs), errs)
+
     def test_装载失败时报错信息带文件名和全部问题(self):
         d0 = good()
         d0["taskOrder"]["channel"] = ""
@@ -203,45 +239,10 @@ class CampaignTest(unittest.TestCase):
             self.assertTrue(d["audiences"], rel)
             self.assertTrue(d["taskOrder"]["abGroups"], rel)
 
-    def test_thresholds_读写往返(self):
-        cfg = self.base / "a.yaml"
-        # 上一轮留下的文件会干扰「一开始是空的」这条断言，先清掉
-        pathlib.Path(campaign.thresholds_path(str(cfg))).unlink(missing_ok=True)
-        cfg.write_text("{}", encoding="utf-8")
-        self.assertEqual(campaign.load_thresholds(str(cfg)), {})
-        campaign.save_thresholds(str(cfg), {"A": {"click": 0, "exposure": 2, "count": 25393,
-                                                  "status": "ok", "base": 64269}})
-        self.assertEqual(campaign.load_thresholds(str(cfg))["A"]["exposure"], 2)
-        self.assertTrue(str(campaign.thresholds_path(str(cfg))).endswith("a.thresholds.yaml"))
-
-
-class ThresholdRecordTest(unittest.TestCase):
-    """调优落点的形状只有一处：对象 / 字典都变成同一份记录（2026-09-23 收口）。
-
-    原先两条写回路径各自拼一遍栏位、取值方式还不同（一处 `r["click"]`、一处 `r.click`），
-    加一栏要改三处、漏一处还不报错。
-    """
-
-    def test_对象和字典产出同一份记录(self):
-        obj = types.SimpleNamespace(click=3, exposure=1, count=262923, status="ok", base=13869)
-        d = {"click": 3, "exposure": 1, "count": 262923, "status": "ok", "base": 13869}
-        self.assertEqual(campaign.threshold_record(obj), campaign.threshold_record(d))
-        self.assertEqual(campaign.threshold_record(obj), d)
-
-    def test_缺栏补None_不静默丢栏(self):
-        want = {"click": 1, "exposure": None, "count": None, "status": None, "base": None}
-        self.assertEqual(campaign.threshold_record({"click": 1}), want)
-        self.assertEqual(campaign.threshold_record(types.SimpleNamespace(click=1)), want)
-
-    def test_栏位清单只此一处(self):
-        self.assertEqual(campaign.THRESHOLD_FIELDS,
-                         ("click", "exposure", "count", "status", "base"))
-
-
 class TestActivityDir(unittest.TestCase):
-    """活动目录解析：整活动 YAML 放在 活动/ 、活动/配置/ 、活动/调整/ 下，都要落到活动目录。
+    """活动目录解析：整活动 YAML 放在 活动/ 、活动/配置/ 、活动/批次/ 下，都要落到活动目录。
 
-    2026-09-17 起 yaml 归到 `配置/`（当前配置）与 `调整/`（重投的那份），而 数据/ 日志/ 仍挂活动目录——
+    yaml 归到 `配置/`（当前配置）与 `批次/`（重投的那份），而 数据/ 日志/ 仍挂活动目录——
     脚本一律走这个函数，别再各自 dirname(config)。
     """
 
@@ -253,107 +254,9 @@ class TestActivityDir(unittest.TestCase):
         cfg = REPO / "activities" / "某活动" / "配置" / "某前缀.yaml"
         self.assertEqual(campaign.activity_dir(str(cfg)), str(REPO / "activities" / "某活动"))
 
-    def test_adjust_folder(self):
-        cfg = REPO / "activities" / "某活动" / "调整" / "2026-09-17-D桶换词重投.yaml"
+    def test_batch_folder(self):
+        cfg = REPO / "activities" / "某活动" / "批次" / "2026-09-17-D桶换词重投.yaml"
         self.assertEqual(campaign.activity_dir(str(cfg)), str(REPO / "activities" / "某活动"))
-
-
-class BatchIndexTest(unittest.TestCase):
-    """批次索引（2026-09-28）：一批 = 一份整活动 YAML；工单名按 naming 算，名字后缀不是批次身份。"""
-
-    def setUp(self):
-        TMP_ROOT.mkdir(parents=True, exist_ok=True)
-        self.act = TMP_ROOT / ("batches_%d_%d" % (os.getpid(), next(_tmp_seq)))
-        (self.act / "配置").mkdir(parents=True)
-        (self.act / "调整").mkdir(parents=True)
-        self.addCleanup(shutil.rmtree, str(self.act), True)
-        self.cfg = self.act / "配置" / "测试-hang.yaml"
-        self._write(self.cfg, self._batch("", "2026-09-09"))
-        self._write(self.act / "调整" / "2026-09-24-六批.yaml", self._batch("-6", "2026-09-24"))
-        self._write(self.act / "调整" / "2026-09-29-七批.yaml", self._batch("-7", "2026-09-29"))
-        self._write(self.act / "配置" / "活动定义.yaml", {"a": 1})      # 生成器输入，不是批次
-
-    @staticmethod
-    def _write(p, data):
-        p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-    @staticmethod
-    def _batch(suffix, start):
-        """good() 改造成"某一批"：带名字后缀 = 本轮新写的资源。"""
-        d = good()
-        if suffix:
-            d["audiences"][0]["nameSuffix"] = suffix
-            d["audiences"][0]["resources"] = [
-                {"role": "experiment1", "name": "测试hang-A类 · 实验1" + suffix,
-                 "title": "标题" + suffix, "summary": "摘要" + suffix, "highlight": "飘红词"}]
-        d["taskOrder"]["deliveryDate"] = {"start": start, "end": "2026-10-12"}
-        return d
-
-    def test_按起投日排序_首批在最前(self):
-        got = campaign.load_batches(str(self.cfg))
-        self.assertEqual([b["label"] for b in got], ["首批", "09-24 六批", "09-29 七批"])
-        self.assertEqual([b["suffix"] for b in got], ["", "-6", "-7"])
-        self.assertEqual(got[1]["yaml"], "调整/2026-09-24-六批.yaml")
-        self.assertEqual(got[2]["start"], "2026-09-29")
-
-    def test_每批给出工单名与本轮文案原文(self):
-        got = campaign.load_batches(str(self.cfg))
-        self.assertEqual(got[1]["orders"]["A"], "测试hang-A类 · 主题A-6")
-        one = got[1]["copy"]["测试hang-A类 · 实验1-6"]
-        self.assertEqual((one["title"], one["summary"], one["highlight"]),
-                         ("标题-6", "摘要-6", "飘红词"))
-        self.assertEqual(one["batch"], "09-24 六批")
-
-    def test_复用老资源的长期单也算桶的当前批次(self):
-        """`resources: []` 但有 `abGroups`（= 会给这个桶建工单）→ 算（2026-10-12 长期单）。"""
-        d = self._batch("", "2026-10-12")
-        a = d["audiences"][0]
-        a["nameSuffix"] = "-长投"
-        a["resources"] = []
-        a["abGroups"] = [{"label": "对照组", "resource": "测试hang-A类 · 对照-5"}]
-        self._write(self.act / "调整" / "2026-10-12-A长期单.yaml", d)
-        bs = campaign.load_batches(str(self.cfg))
-        self.assertEqual(campaign.bucket_current(bs)["A"], "2026-10-12-A长期单")
-
-    def test_靠全局兜底abGroups的批次也算交代(self):
-        """桶自己没写 abGroups、回落到 `taskOrder.abGroups`（run_taskorder 的取法）也要算。"""
-        d = self._batch("", "2026-10-12")
-        d["audiences"][0]["resources"] = []
-        d["audiences"][0].pop("abGroups", None)
-        self._write(self.act / "调整" / "2026-10-12-A兜底.yaml", d)
-        bs = campaign.load_batches(str(self.cfg))
-        self.assertEqual(campaign.bucket_current(bs)["A"], "2026-10-12-A兜底")
-
-    def test_批次索引必须能过json(self):
-        """整份批次索引会进看板 payload（`perf_payload` 的 `batches`），字段必须 JSON 能序列化。
-
-        2026-10-12 真踩到：`abBuckets` 一开始写成了 `set` → `/api/perf` 抛
-        `TypeError: Object of type set is not JSON serializable` → 页面显示 "Failed to fetch"。
-        """
-        import json
-        json.dumps(campaign.load_batches(str(self.cfg)), ensure_ascii=False)
-
-    def test_文案索引跨批次合并_同名取最早那批(self):
-        idx = campaign.copy_index(campaign.load_batches(str(self.cfg)))
-        self.assertEqual(idx["测试hang-A类 · 对照"]["batch"], "首批")   # 「对照」是首批写的那条
-
-    def test_装不上的文件被跳过并报出来(self):
-        lines = []
-        got = campaign.load_batches(str(self.cfg), log=lines.append)
-        self.assertEqual(len(got), 3)
-        self.assertTrue(any("活动定义.yaml" in s for s in lines), lines)
-
-    def test_当前批次取活动最新一批_不看判定门槛的batch字段(self):
-        """2026-10-12：判定门槛里的 `batch` 已删（桶独立之后一个全局批次号没意义）。
-
-        故意往门槛文件里塞一个 `batch: -6`——它必须被**忽略**，结果永远是活动最新那批。
-        """
-        p = self.act / "配置" / "判定门槛.yaml"
-        p.write_text(yaml.safe_dump({"batch": "-6", "buckets": {}}), encoding="utf-8")
-        batches = campaign.load_batches(str(self.cfg))
-        self.assertEqual(campaign.current_batch(batches, str(self.cfg)), "2026-09-29-七批")
-        p.unlink()
-        self.assertEqual(campaign.current_batch(batches, str(self.cfg)), "2026-09-29-七批")
 
 
 class DiscoverTest(unittest.TestCase):
@@ -399,9 +302,9 @@ class DiscoverTest(unittest.TestCase):
         self._write("A活动/配置/a.yaml", self._cfg("A活动-hang"))
         self.assertEqual(self._ids(), ["A活动-hang"])
 
-    def test_调整目录里的批次yaml不纳管(self):
+    def test_批次目录里的批次yaml不纳管(self):
         self._write("A活动/配置/a.yaml", self._cfg("A活动-hang"))
-        self._write("A活动/调整/2026-09-29-七批.yaml", self._cfg("A活动-hang"))
+        self._write("A活动/批次/2026-09-29-七批.yaml", self._cfg("A活动-hang"))
         self.assertEqual(self._ids(), ["A活动-hang"])       # 同一个活动只出现一次
 
     def test_装不上的yaml被跳过并报出来(self):
@@ -428,65 +331,13 @@ class DiscoverTest(unittest.TestCase):
         self.assertEqual(got[0]["activity_dir"], str(self.root / "A活动"))
         self.assertEqual(got[0]["cfg_path"], str(self.root / "A活动" / "配置" / "a.yaml"))
 
-
-class AfterActionsTest(unittest.TestCase):
-    """复盘动作（**人定的调整**，2026-09-30 用户定）：有记录 = 页面写「调整动作」，没记录 = 回落规则「建议动作」。
-
-    键是**被判过的那一批**的批次 id（2026-10-08 起；旧的后缀键 `''` / `-2` 仍能兜底读，2026-10-12 定下
-    "记录挂在你判的那一批"这条口径）。
-    """
-
-    def setUp(self):
-        TMP_ROOT.mkdir(parents=True, exist_ok=True)
-        self.act = TMP_ROOT / ("after_%d_%d" % (os.getpid(), next(_tmp_seq)))
-        (self.act / "配置").mkdir(parents=True)
-        self.addCleanup(shutil.rmtree, str(self.act), True)
-        self.cfg = self.act / "配置" / "测试-hang.yaml"
-        self.cfg.write_text(yaml.safe_dump(good(), allow_unicode=True, sort_keys=False), encoding="utf-8")
-        self.human = self.act / "配置" / "复盘动作.yaml"
-
-    def _write(self, data):
-        self.human.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-    def test_没有这份文件就返回空(self):
-        self.assertEqual(campaign.load_after_actions(str(self.cfg)), {})
-
-    def test_按批次后缀读人定动作(self):
-        self._write({"batches": {"": {"A": {"keep": ["实验组1"], "drop": ["对照组", "实验组2"],
-                                          "new": 2, "note": "用户定：只留实验1"}},
-                                "-2": {"A": {"keep": ["实验组2"], "drop": [], "new": 0, "note": ""}}}})
-        got = campaign.load_after_actions(str(self.cfg))
-        self.assertEqual(got[""]["A"]["keep"], ["实验组1"])
-        self.assertEqual(got[""]["A"]["new"], 2)
-        self.assertEqual(got["-2"]["A"]["keep"], ["实验组2"])
-
-    def test_判定时间与当时读数一起读出来(self):
-        """`at` + `readings` 是 2026-10-12 加的：看板靠它们分「刚判的」和「几天前判的」。"""
-        self._write({"buckets": {"2026-10-08-四批": {"A": {
-            "keep": ["实验组2"], "drop": [], "new": 1, "at": "2026-10-09 10:24",
-            "readings": {"实验组1": [1764, 0], "实验组2": [1632, 2]}, "note": "判定"}}}})
-        got = campaign.load_after_actions(str(self.cfg))
-        self.assertEqual(got["2026-10-08-四批"]["A"]["at"], "2026-10-09 10:24")
-        self.assertEqual(got["2026-10-08-四批"]["A"]["readings"],
-                         {"实验组1": [1764, 0], "实验组2": [1632, 2]})
-
-    def test_文件坏了当成没有_不炸页面(self):
-        self.human.write_text("batches: {A: [", encoding="utf-8")
-        self.assertEqual(campaign.load_after_actions(str(self.cfg)), {})
-
-
-class BucketCurrentTest(unittest.TestCase):
-    """`bucket_current()`：桶的"当前批次"怎么定（2026-10-08 桶独立；2026-10-12 补长期单）。"""
-
-    def test_长期单批次算_纯占位不算(self):
-        b1 = {"id": "b1", "orders": {"D": "x-1"}, "copy": {"r-1": {"bucket": "D"}}}   # 新建了资源
-        b2 = {"id": "b2", "orders": {"D": "x-长投"}, "copy": {}, "abBuckets": {"D"}}   # 复用老资源的长期单
-        b3 = {"id": "b3", "orders": {"D": "x-占位"}, "copy": {}}                      # 纯占位（既没资源也没 abGroups）
-        self.assertEqual(campaign.bucket_current([b1, b2, b3]), {"D": "b2"})
-
-    def test_谁都没交代时回落到最后一个提到的批次(self):
-        b1 = {"id": "b1", "orders": {"A": "x"}, "copy": {}}
-        self.assertEqual(campaign.bucket_current([b1]), {"A": "b1"})
+    def test_活动登记表带上状态与收尾日(self):
+        cfg = self._cfg("A活动-hang")
+        cfg["campaign"].update({"status": "ended", "endedAt": datetime.date(2026, 10, 22)})
+        self._write("A活动/配置/a.yaml", cfg)
+        got = campaign.discover(str(self.root))[0]
+        self.assertEqual(got["status"], "ended")
+        self.assertEqual(got["endedAt"], "2026-10-22")
 
 
 if __name__ == "__main__":

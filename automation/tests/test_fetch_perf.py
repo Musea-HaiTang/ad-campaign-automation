@@ -5,14 +5,18 @@
   - 日期区间：少一天/多一天都会让快照和后台对不上
   - CSV 落盘：必须是 utf-8 带 BOM（不然 Excel 双击打开中文乱码）
 """
-import csv
+import datetime
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
+import campaign  # noqa: E402
 import fetch_perf as fp  # noqa: E402
+import workspace_repo as repo  # noqa: E402
 
 TMP_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_tmp")
 
@@ -42,6 +46,7 @@ class TestDayRange(unittest.TestCase):
 class TestStatusText(unittest.TestCase):
     def test_known(self):
         # 后台发的是字符串（真机核对：A 类 "4" = 下线，测试工单 "1" = 进行中）
+        self.assertEqual(fp.status_text("0"), "未审核")
         self.assertEqual(fp.status_text("4"), "下线")
         self.assertEqual(fp.status_text("1"), "进行中")
         self.assertEqual(fp.status_text(4), "下线")          # 数字也认
@@ -94,27 +99,6 @@ class TestPlanDays(unittest.TestCase):
             fp.plan_days(None, None, None, "2026-09-25", "2026-09-20")
 
 
-class TestWriteCsv(unittest.TestCase):
-    def test_roundtrip_with_bom(self):
-        path = _tmp_csv("day.csv")
-        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
-        fp.write_csv(["曝光时间", "任务名称", "曝光"],
-                     [["2026-09-14", "A类 · 对照", 544]], path)
-        with open(path, "rb") as fh:
-            self.assertTrue(fh.read(3) == b"\xef\xbb\xbf")       # BOM 在
-        with open(path, encoding="utf-8-sig", newline="") as fh:
-            rows = list(csv.reader(fh))
-        self.assertEqual(rows[0], ["曝光时间", "任务名称", "曝光"])
-        self.assertEqual(rows[1], ["2026-09-14", "A类 · 对照", "544"])
-
-    def test_empty_rows_still_writes_header(self):
-        path = _tmp_csv("empty.csv")
-        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
-        fp.write_csv(["a", "b"], [], path)
-        with open(path, encoding="utf-8-sig", newline="") as fh:
-            self.assertEqual(list(csv.reader(fh)), [["a", "b"]])
-
-
 class TestFetchResourceRows(unittest.TestCase):
     """资源级读数的**工单名必须落进库里**（2026-09-24 真踩过：清单换了形状，名字被写成空字符串，
     看板「三套文案」那张卡整块挂到空名字上）。"""
@@ -128,6 +112,83 @@ class TestFetchResourceRows(unittest.TestCase):
         self.addCleanup(lambda: setattr(fp, "call", real_call))
         rows = fp.fetch_resource_rows(object(), [{"id": 1111830, "name": "A类-6", "state": "进行中"}])
         self.assertEqual(rows, [["1111830", "A类-6", "7", "对照组", "对照-6", "107", "0"]])
+
+    def test_单资源长期单回落用工单级累计(self):
+        # 2026-10-13：AB测试=否 的长期单，资源级接口按"实验组"给 → 真机返回 {"total":0,"list":[]}；
+        # 这种工单改从**任务组全量查询**（不给日期 = 累计值）补一条单槽位读数，别让它在看板上消失
+        calls = []
+
+        def fake_call(api, method, path, payload=None):
+            calls.append(path)
+            if "creativeDataByTaskId" in path:
+                return {"total": 0, "list": []}
+            if "taskPageList" in path:
+                return {"total": 2, "list": [
+                    {"id": 1112351, "taskName": "D类-长投", "workStatus": "1",
+                     "exposure": 2363, "click": 1},
+                    {"id": 1112342, "taskName": "A类-7", "workStatus": "1",
+                     "exposure": 4141, "click": 6}]}
+            raise AssertionError("没见过的请求：%s" % path)
+
+        real_call, fp.call = fp.call, fake_call
+        self.addCleanup(lambda: setattr(fp, "call", real_call))
+        rows = fp.fetch_resource_rows(object(),
+                                      [{"id": 1112351, "name": "D类-长投", "state": "进行中"}],
+                                      task_group="KIRO鬼点子计划-hang")
+        self.assertEqual(rows, [["1112351", "D类-长投", "", "对照组", "D类-长投", "2363", "1"]])
+        # 兜底那次全量查询只打一次（多个长期单也只一次）
+        self.assertEqual(len([c for c in calls if "taskPageList" in c]), 1)
+
+    def test_单资源长期单的读数写YAML里那条资源名(self):
+        # 2026-10-13：看板「三套文案」按**资源名**索引文案原文；写成工单名就只剩名字、看不到标题摘要
+        def fake_call(api, method, path, payload=None):
+            if "creativeDataByTaskId" in path:
+                return {"total": 0, "list": []}
+            return {"total": 1, "list": [{"id": 1112351, "taskName": "D类-长投",
+                                          "workStatus": "1", "exposure": 2363, "click": 1}]}
+
+        real_call, fp.call = fp.call, fake_call
+        self.addCleanup(lambda: setattr(fp, "call", real_call))
+        rows = fp.fetch_resource_rows(
+            object(), [{"id": 1112351, "name": "D类-长投", "state": "进行中"}],
+            task_group="KIRO鬼点子计划-hang",
+            single_res={"D类-长投": "D类 · 对照-5"})
+        self.assertEqual(rows, [["1112351", "D类-长投", "", "对照组", "D类 · 对照-5", "2363", "1"]])
+
+    def test_单资源映射从数据库批次读取(self):
+        tmp = tempfile.mkdtemp(prefix="single-map-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "v2.db")
+        conn = repo.connect(path)
+        activity = repo.save_activity(conn, {
+            "activity_key": "demo-hang", "display_name": "示例",
+            "brand": "示例", "owner": "hang", "name_prefix": "demo-hang",
+            "task_group_name": "demo-hang", "activity_link": "https://example.com",
+            "status": "active", "started_on": "2026-10-01", "ended_on": None,
+        })
+        bucket = repo.save_bucket(conn, activity["id"], {
+            "bucket_key": "D", "display_name": "demo-hang-D类",
+            "topic": "", "target": "", "keywords_text": "",
+            "default_threshold_exposure": 1000, "status": "active",
+        })
+        batch = repo.create_bucket_batch(conn, bucket["id"], "2026-10-01")
+        conn.execute("UPDATE bucket_batch SET task_name=? WHERE id=?",
+                     ("D类-长投", batch["id"]))
+        repo.add_creative(conn, batch["id"], "r1", "D类 · 对照-5", "r1",
+                          "", "", "", "", "single", 100)
+        conn.close()
+        self.assertEqual(fp.single_resource_map(path, "demo-hang"),
+                         {"D类-长投": "D类 · 对照-5"})
+
+    def test_没给任务组名就不回落(self):
+        # 命令行拿不到任务组名时保持原样（宁可这条没有读数，也别猜）
+        def fake_call(api, method, path, payload=None):
+            return {"total": 0, "list": []}
+
+        real_call, fp.call = fp.call, fake_call
+        self.addCleanup(lambda: setattr(fp, "call", real_call))
+        self.assertEqual(fp.fetch_resource_rows(
+            object(), [{"id": 1112351, "name": "D类-长投", "state": "进行中"}]), [])
 
 
 class TestTasksFromDayRows(unittest.TestCase):
@@ -165,6 +226,90 @@ class TestTasksToRead(unittest.TestCase):
 
     def test_unknown_state_is_not_read(self):
         self.assertEqual(fp.tasks_to_read([{"id": "9", "name": "99", "state": "99"}]), [])
+
+
+class TestSyncV2(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="fetch-v2-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.config = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..",
+            "activities", "_示例活动", "配置", "示例活动-hang.yaml",
+        )
+        self.cfg = campaign.load(self.config)
+        self.tasks = [{"id": "1001", "name": "示例活动-hang-A类 · 示例人群 A / 写作辅助工具",
+                       "state": "进行中"}]
+
+    def _seed(self, path):
+        conn = repo.connect(path)
+        activity = repo.save_activity(conn, {
+            "activity_key": "示例活动-hang", "display_name": "示例活动",
+            "brand": "示例活动", "owner": "hang", "name_prefix": "示例活动-hang",
+            "task_group_name": "示例活动-hang",
+            "activity_link": "https://example.com/activity",
+            "status": "active", "started_on": "2026-01-05", "ended_on": None,
+        })
+        repo.save_bucket(conn, activity["id"], {
+            "bucket_key": "A", "display_name": "示例活动-hang-A类",
+            "topic": "", "target": "", "keywords_text": "",
+            "default_threshold_exposure": 3000, "status": "active",
+        })
+        conn.close()
+
+    def test_sync_creates_v2_activity_batch_metrics_and_readings(self):
+        v2_path = os.path.join(self.tmp, "v2.db")
+        self._seed(v2_path)
+        task_name = self.tasks[0]["name"]
+        report = fp.sync_v2(
+            v2_path, "示例活动-hang", self.tasks,
+            [["2026-01-05", "1001", task_name, "进行中", 120, 1, 80, 1]],
+            [["1001", task_name, "r1", "对照组",
+              "示例活动-hang-A类 · 对照", "120", "1"]],
+            "2026-01-05", "2026-01-05", "指定区间", "2026-01-05 10:00:00",
+        )
+        self.assertEqual(report["daily_metrics"], 1)
+        self.assertEqual(report["resource_readings"], 1)
+        conn = repo.connect(v2_path)
+        self.addCleanup(conn.close)
+        activity = repo.get_activity(conn, "示例活动-hang")
+        self.assertIsNotNone(activity)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM bucket_batch WHERE task_id='1001'").fetchone()[0],
+            1,
+        )
+        self.assertEqual(repo.last_successful_fetch(conn, activity["id"])["scope"], "full")
+
+    def test_persist_writes_v2_only(self):
+        v2_path = os.path.join(self.tmp, "v2.db")
+        self._seed(v2_path)
+        task_name = self.tasks[0]["name"]
+        fp.persist(
+            v2_path, "示例活动-hang", self.tasks,
+            [["2026-01-05", "1001", task_name, "进行中", 120, 1, 80, 1]],
+            [["1001", task_name, "r1", "对照组",
+              "示例活动-hang-A类 · 对照", "120", "1"]],
+            "2026-01-05", "2026-01-05", mode="指定区间",
+            note=lambda *_: None,
+        )
+        v2 = repo.connect(v2_path)
+        self.addCleanup(v2.close)
+        self.assertEqual(v2.execute("SELECT COUNT(*) FROM daily_metric").fetchone()[0], 1)
+
+    def test_single_day_today_is_recorded_as_refresh(self):
+        day = datetime.date.today().isoformat()
+        v2_path = os.path.join(self.tmp, "v2-today.db")
+        self._seed(v2_path)
+        task_name = self.tasks[0]["name"]
+        fp.sync_v2(
+            v2_path, "示例活动-hang", self.tasks,
+            [[day, "1001", task_name, "进行中", 10, 0, 5, 0]],
+            [["1001", task_name, "r1", "对照组",
+              "示例活动-hang-A类 · 对照", "10", "0"]],
+            day, day, "指定区间", day + " 10:00:00",
+        )
+        conn = repo.connect(v2_path)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT scope FROM fetch_run").fetchone()[0], "today")
 
 
 if __name__ == "__main__":

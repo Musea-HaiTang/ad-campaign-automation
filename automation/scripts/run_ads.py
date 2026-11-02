@@ -23,8 +23,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bucket_runner  # noqa: E402
+import check_campaign  # noqa: E402
 import cli  # noqa: E402
 import csdn_ui as ui  # noqa: E402
+import execution_state  # noqa: E402
+import workspace_sync  # noqa: E402
+import workspace_repo  # noqa: E402
 from playwright.sync_api import expect  # noqa: E402
 
 LIST_URL = "https://mp-admin.csdn.net/silkroad-dist/#/distribute/resource/list?channelType=page"
@@ -39,8 +43,8 @@ def pick_business_line(s, dlg, value):
     ui.log("  业务线:", value)
 
 
-def pick_material_path(s, dlg, path):
-    """素材路径三级：静态广告 → 信息流 → 文本。"""
+def pick_material_path(s, dlg, path, final_placeholder):
+    """按配置逐级选择素材路径，并等最后一个字段出现。"""
     for idx, step_name in enumerate(path):
         radio = dlg.locator("label.el-radio-button:visible").filter(has_text=step_name).first
         expect(radio).to_be_visible(timeout=10000)
@@ -49,8 +53,8 @@ def pick_material_path(s, dlg, path):
             nxt = dlg.locator("label.el-radio-button:visible").filter(has_text=path[idx + 1]).first
             expect(nxt).to_be_visible(timeout=8000)
         else:
-            # 最后一级（文本）选完后，广告标题等三栏字段才出现
-            expect(dlg.locator("input[placeholder='%s']" % ui.PH_AD_TITLE).first).to_be_visible(
+            # 最后一级选完后，资源文案字段才出现
+            expect(dlg.locator("input[placeholder='%s']" % final_placeholder).first).to_be_visible(
                 timeout=8000
             )
         ui.log("  素材路径:", step_name)
@@ -76,32 +80,6 @@ def open_create_dialog(page):
     return dlg
 
 
-def pick_highlight(s, dlg, word):
-    """「是否飘红」：填了飘红词就选「是」并填词；没填就保持默认「否」。
-
-    2026-09-24 加（结构来自只读探针 `automation/_tmp/_probe_highlight.py`）：
-    「是否飘红」是一个 el-form-item，里面 2 个 el-radio（否 / 是）+ 一个输入框 `请输入飘红词`。
-    机制（用户 2026-09-24 实测，**不当结论用、先当口径**）：只能填一个表达（逗号分隔无效），
-    按正则最长匹配，**标题 + 摘要里所有出现处都会标红**，且必须字面出现才标得出来。
-    YAML 字段：`resources[].highlight`（飘红词；留空 = 不飘红）。
-    """
-    word = (word or "").strip()
-    label = dlg.get_by_text("是否飘红", exact=True).first
-    expect(label).to_be_visible(timeout=6000)
-    item = label.locator("xpath=ancestor::div[contains(@class,'el-form-item')]").first
-    want = "是" if word else "否"
-    item.locator("label.el-radio").filter(has_text=want).first.click()
-    if not word:
-        ui.log("  飘红: 否")
-        return True
-    box = item.locator("input[placeholder='%s']" % ui.PH_HIGHLIGHT_WORD).first
-    expect(box).to_be_visible(timeout=6000)
-    box.fill(word)
-    actual = box.input_value()
-    ui.log("  %s 飘红词 | 期望:%r | 实际:%r" % ("✓" if actual == word else "✗", word, actual))
-    return actual == word
-
-
 def preflight_taskgroup(s, cfg):
     """跑前校验：打开新建资源弹窗，读「任务组」下拉的可选项，确认 taskGroupName 存在。
     返回 (found, options)。不存在时应立即中止主流程，避免 21 条连锁失败。"""
@@ -120,7 +98,7 @@ def preflight_taskgroup(s, cfg):
     inp = dlg.locator("input[placeholder='%s']" % ui.PH_TASK_GROUP).first
     inp.click()
     page.wait_for_selector(ui.SEL_DROPDOWN, timeout=8000)
-    page.wait_for_timeout(200)
+    ui.wait_for(page, lambda: ui.dropdown_options(page), timeout=6, what="任务组选项")
     options = ui.dropdown_options(page)
     found = expected in options
     ui.dismiss_dialogs(page)
@@ -135,6 +113,7 @@ def create_one(s, cfg, aud, res, idx):
     sub = aud["subBusinessLine"]
     link = res.get("link") or camp["activityLink"]
     ui.log("[%d] %s" % (idx + 1, name))
+    s.submitted = False      # 重试闸门：点过「确定」之后不许重试（防重复创建）
     dlg = open_create_dialog(s.page)
 
     # 1) 业务线（显式重选，绑 departmentId）
@@ -155,24 +134,25 @@ def create_one(s, cfg, aud, res, idx):
     # 5) 渠道（穿梭框）
     ui.transfer(s, dlg, c["channel"])
     # 6) 素材路径
-    pick_material_path(s, dlg, c["materialPath"])
-    # 7) 三栏（title/summary 取资源；link 取 link，默认继承 campaign.activityLink）
+    pick_material_path(s, dlg, c["materialPath"], c["fields"]["title"]["placeholder"])
+    # 7) 文案字段（title/summary 取资源；link 默认继承 campaign.activityLink；username 取 controls）
     ok2 = True
     for key, spec in c["fields"].items():
-        val = link if key == "link" else res.get(key, "")
+        if key == "link":
+            val = link
+        elif key == "username":
+            val = c.get("username", "")
+        else:
+            val = res.get(key, "")
         val = (val or "").rstrip("\n")
         fill_text_field(dlg, spec["placeholder"], val, spec.get("type", "input"))
         actual = ui.read_field(dlg, spec["placeholder"])
         ok2 = (actual == val) and ok2
         ui.log("  %s %s | 期望:%r | 实际:%r" % ("✓" if actual == val else "✗", key, val, actual))
 
-    # 8) 飘红（2026-09-24 加）：res.highlight = 飘红词，空 = 不飘红（保持默认「否」）
-    ok3 = pick_highlight(s, dlg, res.get("highlight"))
-
     ui.shot(s, "item_%02d_filled.png" % (idx + 1))
-    ui.log("  基本信息校验:%s | 三栏校验:%s | 飘红校验:%s" % (ok1, ok2, ok3))
-    steps = [("资源名称", "ok" if ok1 else "fail"), ("三栏", "ok" if ok2 else "fail"),
-             ("飘红", "ok" if ok3 else "fail")]
+    ui.log("  基本信息校验:%s | 文案字段校验:%s" % (ok1, ok2))
+    steps = [("资源名称", "ok" if ok1 else "fail"), ("文案字段", "ok" if ok2 else "fail")]
 
     if s.dry_run:
         cancel = dlg.locator("button").filter(has_text="取消").last
@@ -186,7 +166,7 @@ def create_one(s, cfg, aud, res, idx):
     # 而事后的回读只查"名字在不在"，查不出字段缺失。
     if bucket_runner.steps_status(steps) == bucket_runner.WARN:
         bad = "、".join(n for n, r in steps if r != "ok")
-        ui.log("  !! 有步骤未通过（%s）→ **不提交**，记 warn（下次重跑）" % bad)
+        ui.log("  !! 有步骤未通过（%s）→ **不提交**，关闭表单后整项重试" % bad)
         cancel = dlg.locator("button").filter(has_text="取消").last
         if cancel.count():
             cancel.click()
@@ -196,10 +176,18 @@ def create_one(s, cfg, aud, res, idx):
             expect(dlg).to_be_hidden(timeout=8000)
         except Exception:
             pass
-        return bucket_runner.WARN
+        raise bucket_runner.pre_submit_error(steps)
 
     submit_btn = dlg.locator("button.el-button--primary").filter(has_text="确定").last
-    submit_btn.click()
+    s.submitted = True       # 就这一下之后失败（弹窗没关 / 提示出错）不能再重试
+    with s.page.expect_response(
+            lambda r: r.request.method == "POST" and "tResourceBaseInfo/add" in r.url,
+            timeout=15000) as response_info:
+        try:
+            submit_btn.click(timeout=1500)
+        except Exception:
+            ui.close_dropdown(s.page)     # 下拉浮层可能挡住按钮
+            submit_btn.click()
     try:
         expect(dlg).to_be_hidden(timeout=15000)
     except Exception:
@@ -208,42 +196,81 @@ def create_one(s, cfg, aud, res, idx):
         raise
     msgs = s.page.locator(".el-message").all_inner_texts()
     ui.log("  [%d] 提交成功 | 提示:%s" % (idx + 1, msgs))
+    try:
+        body = response_info.value.json()
+        resource_id = body.get("data")
+        if resource_id:
+            detail = s.page.context.request.get(
+                "https://csdn-distadmin.csdn.net/admin/tResourceBaseInfo/detail",
+                params={"id": resource_id},
+                headers={"Accept": "application/json"},
+            ).json().get("data") or {}
+            actual = (detail.get("createBy") or "").strip()
+            expected = getattr(s, "login_user", "")
+            if expected and actual == expected:
+                ui.log("  ✓ 申请人 | %s" % actual)
+            else:
+                s.creator_mismatch = True
+                ui.log("  ✗ 申请人 | 期望:%r | 实际:%r" % (expected, actual))
+    except Exception as e:
+        s.creator_mismatch = True
+        ui.log("  ⚠ 申请人回读未确认：%s" % str(e).splitlines()[0][:120])
     return "submitted"   # 真创建了 → 账本记 submitted，再跑时永远跳过
 
 
 def verify_created_resources(s, cfg, names):
-    """整批跑完**一次性回读**：资源列表按「任务组」筛一遍，核对这批资源名在不在。
+    """提交后按精确体检同一条路径回读；空列表=全在，缺失=确认缺失，None=未确认。"""
+    ui.log("---- 回读核对：与 check_campaign 共用精确资源检索，核对 %d 个资源名 ----"
+           % len(names))
+    hits = check_campaign.check_resources_for_config(s, cfg, only_names=names)
+    miss = [name for name in names if hits.get(name) is False]
+    unknown = [name for name in names if hits.get(name) is None]
+    for name in names:
+        mark = "✓ 已建" if hits.get(name) is True else (
+            "? 未确认" if hits.get(name) is None else "✗ 查不到")
+        ui.log("  %s %s" % (mark, name))
+    ui.log("  回读核对：%d/%d 确认在位"
+           % (sum(1 for name in names if hits.get(name) is True), len(names)))
+    if miss:
+        return miss
+    return None if unknown else []
 
-    2026-09-22 加（`automation/README.md`「写入后台必须回读核对」）：原来提交后只等弹窗关闭 + 读提示，
-    后台其实没落库也会记 `submitted`。逐条核对要多付 21 次列表往返，所以**整批核一次**
-    （跟 `check_campaign.py` 查资源同一个方式：用「任务组」下拉一次列全）。
-    返回没找到的资源名；空列表 = 全部在位。
-    """
-    page = s.page
-    team = cfg["campaign"]["taskGroupName"]
-    ui.log("---- 回读核对：资源列表按任务组 %r 筛一遍，核对 %d 个资源名 ----" % (team, len(names)))
-    ui.goto(page, LIST_URL)
-    ui.wait_for(page, lambda: ui.visible_input(page, ui.PH_TASK_GROUP) is not None,
-                timeout=12, what="资源列表筛选框")
-    try:
-        ui.select(s, ui.visible_input(page, ui.PH_TASK_GROUP), team)
-    except Exception as e:
-        ui.log("  ⚠ 任务组筛选不可用（%s）→ 回读跳过（不当作缺失；需要自己跑 check_campaign 核一遍）"
-               % str(e).splitlines()[0][:100])
-        return []
-    page.locator("button:visible").filter(has_text="查询").first.click()
-    ui.wait_for(page, lambda: all(n in page.locator("body").inner_text() for n in names),
-                timeout=10, what="资源列表查询结果")
-    text = page.locator("body").inner_text()
-    miss = [n for n in names if n not in text]
-    for n in names:
-        ui.log("  %s %s" % ("✗ 查不到" if n in miss else "✓ 已建", n))
-    ui.log("  回读核对：%d/%d 在位" % (len(names) - len(miss), len(names)))
-    return miss
+
+def payload_for(cfg, aud, res):
+    """同一资源业务键下的完整创建载荷。"""
+    controls = cfg["controls"]
+    values = {}
+    for key, spec in controls["fields"].items():
+        if key == "link":
+            values[key] = res.get("link") or cfg["campaign"]["activityLink"]
+        elif key == "username":
+            values[key] = controls.get("username", "")
+        else:
+            values[key] = res.get(key, "")
+    return {
+        "taskGroup": cfg["campaign"]["taskGroupName"],
+        "bucket": aud["id"],
+        "resourceName": res.get("name"),
+        "subBusinessLine": aud["subBusinessLine"],
+        "channel": controls["channel"],
+        "materialPath": controls["materialPath"],
+        "fields": values,
+    }
+
+
+def lookup_resource(s, cfg, name):
+    found = check_campaign.check_resources_for_config(
+        s, cfg, only_names=[name]).get(name)
+    if found is True:
+        return execution_state.found()
+    if found is False:
+        return execution_state.absent()
+    return execution_state.unknown("资源精确查询未确认")
 
 
 def main():
     ap = cli.parser("真正点『确定』创建资源（默认彩排）", only=True)
+    ap.add_argument("--v2-db", default=workspace_repo.V2_DB, help="数据库 v2 路径")
     args = ap.parse_args()
 
     ctx = cli.context(args, shots="shots", progress="ads_progress.json")
@@ -263,12 +290,17 @@ def main():
                 ui.log("--only %s → 只跑 %d 个桶（%s）"
                        % (",".join(ctx.only), len(ctx.auds),
                           ", ".join(str(a["id"]) for a in ctx.auds)))
-            ui.goto(page, LIST_URL)
-            expect(page.get_by_text("新建资源", exact=True).first).to_be_visible(timeout=15000)
+            def prepare():
+                ui.goto(s.page, LIST_URL)
+                s.login_user = ui.require_login_identity(s.page)
+                expect(s.page.get_by_text("新建资源", exact=True).first).to_be_visible(
+                    timeout=15000)
+                return preflight_taskgroup(s, ctx.cfg)
 
             # ---- preflight：任务组名不在下拉里就中止（避免 21 条连锁失败）----
             tg = ctx.cfg["campaign"]["taskGroupName"]
-            found, options = preflight_taskgroup(s, ctx.cfg)
+            found, options = ui.retry_browser_action(
+                s, prepare, what="资源列表准备")
             blocked = not found
             if blocked:
                 ui.log("!! PREFLIGHT 失败：任务组 '%s' 不在下拉可选项中。" % tg)
@@ -286,7 +318,13 @@ def main():
                     key_of=lambda it: "%s|%s|%s" % (task_group, it[1]["id"], it[2]["name"]),
                     describe=lambda it: "[%d] %s" % (it[0], it[2]["name"]),
                     progress=ctx.progress,
-                    on_item_fail=lambda it: ui.dismiss_dialogs(page),
+                    reconcile=lambda it: lookup_resource(
+                        s, ctx.cfg, it[2]["name"]),
+                    payload_of=lambda it: payload_for(ctx.cfg, it[1], it[2]),
+                    on_item_fail=lambda it: ui.dismiss_dialogs(s.page),
+                    on_retry=lambda it, e: ui.retry_reset(s, e, LIST_URL),
+                    retry=1,
+                    should_retry=lambda it, e: not getattr(s, "submitted", False),
                     log=ui.log,
                     dry_run=not args.submit,
                     unit="条", rest="条目")
@@ -298,8 +336,40 @@ def main():
                                  == bucket_runner.SUBMITTED]
                     if submitted:
                         miss = verify_created_resources(s, ctx.cfg, submitted)
-                        if miss:
+                        if miss is None:
+                            ctx.report.warned += 1
+                            for it in items:
+                                key = "%s|%s|%s" % (task_group, it[1]["id"], it[2]["name"])
+                                if ctx.progress.get(key) == bucket_runner.SUBMITTED:
+                                    ctx.progress.set(key, bucket_runner.NEEDS_RECONCILE)
+                        elif miss:
                             ctx.report.warned += len(miss)
+                            for it in items:
+                                key = "%s|%s|%s" % (task_group, it[1]["id"], it[2]["name"])
+                                if (it[2]["name"] in miss and
+                                        ctx.progress.get(key) == bucket_runner.SUBMITTED):
+                                    ctx.progress.set(key, bucket_runner.NEEDS_RECONCILE)
+                    if getattr(s, "creator_mismatch", False):
+                        ctx.report.warned += 1
+                    if args.v2_db:
+                        submitted_ids = set()
+                        for it in items:
+                            key = "%s|%s|%s" % (task_group, it[1]["id"], it[2]["name"])
+                            if ctx.progress.get(key) == bucket_runner.SUBMITTED:
+                                submitted_ids.add(it[1]["id"])
+                        auds = []
+                        seen = set()
+                        for _, aud, _ in items:
+                            if aud["id"] in submitted_ids and aud["id"] not in seen:
+                                seen.add(aud["id"])
+                                auds.append(aud)
+                        if auds:
+                            workspace_sync.sync_config_batch(
+                                args.v2_db, ctx.cfg, auds,
+                                ctx.cfg["taskOrder"]["deliveryDate"]["start"],
+                                change_reason=os.path.basename(args.config),
+                                status="planned",
+                            )
     except Exception as e:
         cli.fatal(ctx, e)
     cli.finish(ctx.report)

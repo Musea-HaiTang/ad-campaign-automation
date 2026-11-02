@@ -9,11 +9,13 @@ import pathlib
 import shutil
 import sys
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]  # automation/
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import bucket_runner as br  # noqa: E402
+import execution_state as es  # noqa: E402
 
 
 class QuietLog:
@@ -168,6 +170,51 @@ class BucketRunnerTest(unittest.TestCase):
                            progress=br.Progress(self.progress_path), log=self.log)
         self.assertEqual((r.done, seen), (1, ["a"]))
 
+    def test_strict_progress_file_rejects_broken_file(self):
+        path = pathlib.Path(self.progress_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ 这不是 json", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "进度账本无法读取"):
+            br.Progress(self.progress_path, strict=True)
+
+    def test_strict_progress_missing_file_still_starts_empty(self):
+        self.assertEqual(br.Progress(self.progress_path, strict=True).data, {})
+
+    def test_progress_write_replaces_file_without_leaving_temp(self):
+        p = br.Progress(self.progress_path)
+        p.set("a", br.DONE)
+        p.set("b", br.SUBMITTED)
+
+        path = pathlib.Path(self.progress_path)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")),
+                         {"a": br.DONE, "b": br.SUBMITTED})
+        self.assertEqual(list(path.parent.glob("progress.json.*.tmp")), [])
+
+    def test_submitting_record_keeps_payload_hash_and_can_be_reconciled(self):
+        p = br.Progress(self.progress_path, strict=True)
+        p.start("a", "payload-1")
+        self.assertEqual(p.get("a"), br.SUBMITTING)
+        self.assertEqual(p.record("a")["payload_hash"], "payload-1")
+        p.finish("a", br.SUBMITTED, remote_id="99")
+        restored = br.Progress(self.progress_path, strict=True)
+        self.assertEqual(restored.get("a"), br.SUBMITTED)
+        self.assertEqual(restored.record("a")["remote_id"], "99")
+        self.assertEqual(restored.record("a")["payload_hash"], "payload-1")
+
+    def test_progress_replace_failure_keeps_old_file_and_memory(self):
+        p = br.Progress(self.progress_path)
+        p.set("old", br.SUBMITTED)
+
+        with mock.patch.object(br.os, "replace", side_effect=OSError("模拟替换失败")):
+            with self.assertRaisesRegex(OSError, "模拟替换失败"):
+                p.set("new", br.SUBMITTED)
+
+        path = pathlib.Path(self.progress_path)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")),
+                         {"old": br.SUBMITTED})
+        self.assertIsNone(p.get("new"))
+        self.assertEqual(list(path.parent.glob("progress.json.*.tmp")), [])
+
     def test_reset_progress_starts_empty(self):
         p = br.Progress(self.progress_path)
         p.set("a", br.DONE)
@@ -196,6 +243,161 @@ class BucketRunnerTest(unittest.TestCase):
         br.run_buckets([1], run_one, log=self.log)
         self.assertIn("第一行", self.log.text())
         self.assertNotIn("第二行", self.log.text())
+
+    # ---------- 自动重试（2026-10-15 加：治后台页面渲染抖动） ----------
+    def test_retry_off_by_default(self):
+        calls = []
+
+        def run_one(item):
+            calls.append(item)
+            return False
+
+        r = br.run_buckets([1], run_one, log=self.log)
+        self.assertEqual(calls, [1])
+        self.assertEqual(r.failed, 1)
+        self.assertNotIn("↻", self.log.text())
+
+    def test_first_fail_then_retry_succeeds(self):
+        calls = []
+        resets = []
+
+        def run_one(item):
+            calls.append(item)
+            if len(calls) == 1:
+                raise RuntimeError("下拉无此选项: 企业服务事业部 | 可见选项(0): []")
+            return True
+
+        r = br.run_buckets([1], run_one, retry=1,
+                           on_item_retry=lambda it: resets.append(it), log=self.log)
+        self.assertEqual(calls, [1, 1])
+        self.assertEqual(resets, [1])
+        self.assertEqual((r.attempted, r.done, r.failed), (1, 1, 0))
+        self.assertIn("↻", self.log.text())
+        self.assertEqual(r.status, br.OK)
+
+    def test_should_retry_false_blocks_retry(self):
+        calls = []
+
+        def run_one(item):
+            calls.append(item)
+            return False
+
+        r = br.run_buckets([1], run_one, retry=3,
+                           should_retry=lambda it, e: False, log=self.log)
+        self.assertEqual(calls, [1])
+        self.assertEqual(r.failed, 1)
+        self.assertNotIn("↻", self.log.text())
+
+    def test_on_retry拿到异常并优先于普通重开(self):
+        calls, seen, reset = [], [], []
+
+        def run_one(item):
+            calls.append(item)
+            if len(calls) == 1:
+                raise RuntimeError("Page.goto: Timeout 25000ms exceeded.")
+            return True
+
+        br.run_buckets(
+            [1], run_one, retry=1, log=self.log,
+            on_retry=lambda item, exc: seen.append((item, str(exc))),
+            on_item_retry=lambda item: reset.append(item))
+        self.assertEqual(calls, [1, 1])
+        self.assertEqual(seen[0][0], 1)
+        self.assertIn("Page.goto", seen[0][1])
+        self.assertEqual(reset, [])
+
+    def test_retry_exhausted_counts_as_one_failure(self):
+        calls = []
+
+        def run_one(item):
+            calls.append(item)
+            return False
+
+        r = br.run_buckets([1], run_one, retry=2, abort_after=0, log=self.log)
+        self.assertEqual(calls, [1, 1, 1])
+        self.assertEqual((r.attempted, r.failed), (1, 1))
+        self.assertTrue(r.aborted)
+
+    # ---------- 模式二：丢失提交结果后定点对账 ----------
+    def test_中断后定点对账发现已建则复用(self):
+        seen = []
+        p = br.Progress(self.progress_path, strict=True)
+        p.start("a", es.payload_hash("payload-a"))
+
+        r = br.run_buckets(
+            ["a"], self.done_runner(seen), key_of=lambda it: it, progress=p,
+            payload_of=lambda it: "payload-a",
+            reconcile=lambda item: es.found("remote-" + item),
+            dry_run=False, log=self.log)
+
+        self.assertEqual(seen, [])
+        self.assertEqual(r.skipped, 1)
+        self.assertEqual(p.get("a"), br.SUBMITTED)
+        self.assertEqual(p.record("a")["remote_id"], "remote-a")
+
+    def test_中断后定点对账确认未建才重跑(self):
+        seen = []
+        p = br.Progress(self.progress_path, strict=True)
+        p.start("a", es.payload_hash("payload-a"))
+
+        def run_one(item):
+            seen.append((item, p.get(item), p.record(item)["payload_hash"]))
+            return br.SUBMITTED
+
+        r = br.run_buckets(
+            ["a"], run_one, key_of=lambda it: it, progress=p,
+            payload_of=lambda it: "payload-a",
+            reconcile=lambda item: es.absent(),
+            dry_run=False, log=self.log)
+
+        self.assertEqual(r.status, br.OK)
+        self.assertEqual(seen, [("a", br.SUBMITTING, es.payload_hash("payload-a"))])
+        self.assertEqual(p.get("a"), br.SUBMITTED)
+
+    def test_unknown_remote_state_blocks_blind_retry(self):
+        seen = []
+        p = br.Progress(self.progress_path, strict=True)
+        p.start("a", es.payload_hash("payload-a"))
+
+        r = br.run_buckets(
+            ["a"], self.done_runner(seen), key_of=lambda it: it, progress=p,
+            payload_of=lambda it: "payload-a",
+            reconcile=lambda item: es.unknown("接口超时"),
+            dry_run=False, log=self.log)
+
+        self.assertEqual(seen, [])
+        self.assertEqual(r.warned, 1)
+        self.assertEqual(p.get("a"), br.NEEDS_RECONCILE)
+
+    def test_未记录过的新项不预读后台(self):
+        seen = []
+        p = br.Progress(self.progress_path, strict=True)
+
+        r = br.run_buckets(
+            ["a"], self.done_runner(seen), key_of=lambda it: it, progress=p,
+            payload_of=lambda it: "payload-a",
+            reconcile=lambda item: self.fail("新建项不应触发预读"),
+            dry_run=False, log=self.log)
+
+        self.assertEqual(seen, ["a"])
+        self.assertEqual(r.status, br.OK)
+
+    def test_payload_hash_mismatch_against_existing_remote_is_conflict(self):
+        seen = []
+        p = br.Progress(self.progress_path, strict=True)
+        p.start("a", "old-hash")
+        p.set("a", br.NEEDS_RECONCILE)
+
+        r = br.run_buckets(
+            ["a"], self.done_runner(seen), key_of=lambda it: it, progress=p,
+            payload_of=lambda it: "new-hash",
+            reconcile=lambda item: es.found("remote-a"),
+            dry_run=False, log=self.log)
+
+        self.assertEqual(seen, [])
+        self.assertEqual(r.warned, 1)
+        self.assertEqual(p.get("a"), br.NEEDS_RECONCILE)
+        self.assertIn("payload", self.log.text())
 
 
 if __name__ == "__main__":

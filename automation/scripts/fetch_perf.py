@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""取数（只读快照）：把后台的投放数据抓成一份只增不改的快照。
+"""取数（只读查询）：把后台投放数据同步到数据库 v2。
 
 数据全部来自**只读查询接口**，不碰后台的「导出」模块：
   1. `POST /tTaskInfo/taskPageList`（按**每天**查一次）→ 工单 × 日期的曝光/点击/登录曝光/登录点击
@@ -22,14 +22,8 @@
 代价（明说）：按天数据要**一天查一次**，N 天 = N 次请求（30 天约 30 次）；资源级**每个在投工单一次**
 （本活动现在 5 条，远少于"全组 26 个工单逐个查"）。
 
-落在两处（2026-09-20 改成「库 + 取数流水」）：
-
-  ① 台账库（**唯一真相**，看板只读它）：`activities/_db/投放数据.db`（见 `perf_db.py`）
-     - 按天事实按 (工单, 日期) upsert：历史是终值、写了不动；**今天那行每次刷新覆盖**。
-     - 资源读数每次取数追加一条（资源级接口给的是累计值，天然是读数序列）。
-  ② 取数流水（**原始存档**，可 diff）：`activities/{活动名}/数据/{YYYY-MM-DD_HHMM}[_{标签}]/`
-     落这次**实际取回来**的那几天的 CSV —— 它是"我们哪天向后台要过什么"的凭据，
-     不再是看板的数据源。所以一天取几次都无所谓（以前"一天只留一份"的规矩已退休）。
+只落一处：`activities/_db/投放数据.db`。按天事实按 (工单, 日期) upsert；
+资源读数每次取数追加一条；每次取数写一条 `fetch_run`。不再生成 CSV 流水。
 
 两种粒度口径不同，别混着算：
   - 按天事实：一天一行，**昨天及以前是终值、今天还没走完**（看板会把今天标出来）。
@@ -37,7 +31,7 @@
     （后台那个接口不认日期参数）；要看某段时间各涨了多少，拿两条读数做差。
 
 用法:
-    python -u automation/scripts/fetch_perf.py --config activities/{活动名}/配置/{品牌}{负责人}.yaml
+    python -u automation/scripts/fetch_perf.py --activity {任务组名}
     # 默认（＝看板上的「取数」）：库里最近有数据那天 ~ **昨天**，把昨天的数固定下来
     #   （昨天一天一次就够，它不会再变）；空库则从活动投放开始日全量回填
     ... --from 2026-09-20 --to 2026-09-20      # 只取今天 = 看板上「刷新」干的事（今天的实时数）
@@ -49,7 +43,6 @@
 ⚠ 导出结束日默认「昨天」：当天的数据只有几小时，会把曲线拽下去。
 """
 import argparse
-import csv
 import datetime
 import json
 import os
@@ -57,47 +50,17 @@ import sys
 import time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", r"D:\playwright-browsers")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import campaign as campaign_mod  # noqa: E402
-import perf_db  # noqa: E402
+import browser_broker as broker  # noqa: E402
+import workspace_repo  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PROFILE = os.path.join(REPO, ".browser-profile")
 API = "https://csdn-distadmin.csdn.net/admin"
 HDR = {"Content-Type": "application/json", "Accept": "application/json"}
 PAGE_SIZE = 100
-DAY_COLUMNS = ["曝光时间", "任务ID", "任务名称", "状态", "曝光", "点击", "登录曝光", "登录点击"]
-RES_COLUMNS = ["任务ID", "任务名称", "资源ID", "组别", "资源名称", "曝光次数", "点击次数"]
-README = """# 数据（取数流水 + 台账库）
-
-真相在**台账库**里，这里放的是**原始存档**（2026-09-20 起）。
-
-| 位置 | 是什么 |
-|---|---|
-| `../_db/投放数据.db`（SQLite） | **唯一真相**：按天事实 + 资源读数 + 工单状态，看板只读它 |
-| `{YYYY-MM-DD_HHMM}[_标签]/投放数据.csv` | 这次**实际取回来**的那几天的工单级数据（原始返回） |
-| `{YYYY-MM-DD_HHMM}[_标签]/资源级累计.csv` | 这次取数那一刻的资源级累计值（读数） |
-| `看板/*.html` | 由 `visualize_perf.py` 渲染的单文件看板（可随时重渲染，不是取数产出） |
-
-## 口径
-
-- 数据来自后台的**只读查询接口**（任务列表 + 任务资源明细），**以后台为准**。
-- **按天事实**：一天一行，只含有数据出现的日期；**昨天及以前是终值，今天还没走完**
-  （看板会把今天标出来，"日均曝光"等判定按完整日算）。
-- **资源级**：一个资源一行，是**累计值**——覆盖该任务整个投放期到取数这一刻，所以含当天。
-  想看"某段时间里三套文案各涨了多少"，拿两条读数做差。
-- 取数时刻和标签在**文件夹名**里（`2026-09-20_0939`、`2026-09-20_1430_调整前`）。
-  一天取几次就有几个文件夹——**它们是流水，不是"最新一份才是真相"**。
-  **「刷新今天」不落流水**（数据直接进台账库，`--no-archive`），所以一天最多一份流水 = 当天的「取数」（2026-09-20 起）。
-- `测试工单-火山引擎MediaKit-hang-A类…` 是 A 组的**正式口径**（正版 A 组时间设错、2026-09-14 后已无数据）：
-  **分析 A 组只看这一条**（2026-09-17 用户定）；9/14 那天两条并存、数据混杂，不当基线用。
-"""
-
-
 def log(*a):
     print(*a, flush=True)
 
@@ -197,23 +160,208 @@ def fetch_day_rows(api, task_group_name, day):
 def status_text(code):
     """后台的 workStatus 是**字符串**（"4" / "1"）。
 
-    真机核对：A 类 `"4"` 在后台显示「下线」，测试工单 `"1"` 显示「进行中」。
+    真机核对：`"0"` 显示「未审核」，`"4"` 显示「下线」，`"1"` 显示「进行中」。
     没见过的值原样带出来，不猜。
     """
     try:
-        return {1: "进行中", 4: "下线"}.get(int(code), str(code))
+        return {0: "未审核", 1: "进行中", 4: "下线"}.get(int(code), str(code))
     except (TypeError, ValueError):
         return str(code)
 
 
-def fetch_resource_rows(api, tasks):
+def single_resource_map(v2_db_path, activity_key):
+    """单资源长期单：**工单名 → 那条复用的资源名**。
+
+    2026-10-13：这种工单的资源级数据后台不给（它按"实验组"返回），只能用工单级累计补读数；
+    但读数上的**资源名得是真的**——看板「三套文案」那张卡是按资源名去查文案原文的。
+    映射直接查 v2 的 `bucket_batch` + `creative`，不读历史 YAML。
+    """
+    conn = workspace_repo.connect(v2_db_path)
+    try:
+        activity = workspace_repo.get_activity(conn, activity_key)
+        if activity is None:
+            return {}
+        return workspace_repo.single_resource_map(conn, activity["id"])
+    finally:
+        conn.close()
+
+
+def _v2_slot(label, used, resource_id):
+    text = str(label or "")
+    preferred = (
+        "experiment1" if ("实验组1" in text or "实验1" in text) else
+        "experiment2" if ("实验组2" in text or "实验2" in text) else
+        "control" if "对照" in text else None
+    )
+    if preferred and preferred not in used:
+        return preferred
+    if not resource_id and "single" not in used:
+        return "single"
+    return next((x for x in ("control", "experiment1", "experiment2", "single")
+                 if x not in used), None)
+
+
+def sync_v2(v2_db_path, activity_key, tasks, day_rows, res_rows,
+            start, end, mode, fetched_at):
+    """把一次已成功取回的数据同步到数据库 v2。"""
+    conn = workspace_repo.connect(v2_db_path)
+    try:
+        activity = workspace_repo.get_activity(conn, activity_key)
+        if activity is None:
+            raise RuntimeError("数据库里没有活动：%s" % activity_key)
+        all_days = sorted({row[0] for row in day_rows if row[0]})
+        started_on = all_days[0] if all_days else start
+        buckets = {
+            bucket["bucket_key"]: bucket
+            for bucket in workspace_repo.list_buckets(conn, activity["id"])
+        }
+
+        today = datetime.date.today().isoformat()
+        scope = "today" if (
+            "今天" in str(mode) or "刷新" in str(mode) or
+            (start == end == today)
+        ) else "full"
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO fetch_run(activity_id, scope, triggered_by, requested_from, "
+                "requested_to, started_at, finished_at, status, returned_days, "
+                "total_exposure, total_click) VALUES(?,?,?,?,?,?,?,'ok',?,?,?)",
+                (activity["id"], scope, "system", start, end, fetched_at, fetched_at,
+                 len(all_days), sum(_int(r[4]) for r in day_rows),
+                 sum(_int(r[5]) for r in day_rows)),
+            )
+        fetch_id = cur.lastrowid
+
+        batch_by_task = {}
+        for task in tasks:
+            task_id = str(task["id"])
+            row = conn.execute(
+                "SELECT * FROM bucket_batch WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    "SELECT bb.* FROM bucket_batch bb JOIN bucket b ON b.id=bb.bucket_id "
+                    "WHERE b.activity_id=? AND bb.task_name=? "
+                    "ORDER BY bb.batch_no DESC LIMIT 1",
+                    (activity["id"], task.get("name") or ""),
+                ).fetchone()
+            if row is None:
+                matches = [
+                    (key, bucket) for key, bucket in buckets.items()
+                    if bucket["display_name"] in str(task.get("name") or "")
+                ]
+                if len(matches) != 1:
+                    raise RuntimeError("v2 无法判断工单属于哪个桶：%s" % task.get("name"))
+                bucket = matches[0][1]
+                task_days = sorted(r[0] for r in day_rows if str(r[1]) == task_id)
+                status = "running" if task.get("state") == "进行中" else "closed"
+                row = workspace_repo.create_bucket_batch(
+                    conn, bucket["id"], task_days[0] if task_days else started_on,
+                    change_reason="取数发现未登记工单", created_by="system", status=status,
+                )
+                with conn:
+                    conn.execute(
+                        "UPDATE bucket_batch SET task_id=?, task_name=?, task_state=? WHERE id=?",
+                        (task_id, task.get("name") or "", task.get("state") or "", row["id"]),
+                    )
+                row = workspace_repo.get_bucket_batch(conn, row["id"])
+            else:
+                with conn:
+                    conn.execute(
+                        "UPDATE bucket_batch SET task_id=?, task_name=?, task_state=? WHERE id=?",
+                        (task_id, task.get("name") or row["task_name"],
+                         task.get("state") or "", row["id"]),
+                    )
+                row = workspace_repo.get_bucket_batch(conn, row["id"])
+            batch_by_task[task_id] = row
+
+        creative_by_key = {}
+        for row in res_rows:
+            task_id = str(row[0])
+            batch = batch_by_task.get(task_id)
+            if batch is None:
+                raise RuntimeError("v2 资源读数没有对应工单：%s" % task_id)
+            resource_id = str(row[2] or "")
+            resource_name = str(row[4] or "")
+            creative = conn.execute(
+                "SELECT * FROM creative WHERE batch_id=? AND resource_id=? LIMIT 1",
+                (batch["id"], resource_id),
+            ).fetchone() if resource_id else None
+            if creative is None and resource_name:
+                creative = conn.execute(
+                    "SELECT * FROM creative WHERE batch_id=? AND resource_name=? LIMIT 1",
+                    (batch["id"], resource_name),
+                ).fetchone()
+            if creative is None:
+                used = {r["slot"] for r in conn.execute(
+                    "SELECT slot FROM creative WHERE batch_id=?", (batch["id"],)
+                )}
+                slot = _v2_slot(row[3], used, resource_id)
+                if slot is None:
+                    raise RuntimeError("v2 工单资源槽位已满：%s" % batch["task_name"])
+                creative = workspace_repo.add_creative(
+                    conn, batch["id"], resource_id, resource_name,
+                    copy_id=resource_name or resource_id or task_id,
+                    title="", summary="", angle_key="", style_key="",
+                    slot=slot, weight_pct=0, status="running",
+                )
+            creative_by_key[(task_id, resource_id or resource_name)] = creative
+
+        for row in day_rows:
+            task_id = str(row[1])
+            batch = batch_by_task.get(task_id)
+            if batch is None:
+                raise RuntimeError("v2 按天数据没有对应工单：%s" % task_id)
+            workspace_repo.upsert_daily_metric(
+                conn, batch["id"], row[0], _int(row[4]), _int(row[5]),
+                _int(row[6]), _int(row[7]), fetch_id,
+            )
+
+        for row in res_rows:
+            task_id = str(row[0])
+            batch = batch_by_task[task_id]
+            resource_id = str(row[2] or "")
+            resource_name = str(row[4] or "")
+            creative = creative_by_key.get((task_id, resource_id or resource_name))
+            if creative is None:
+                creative = conn.execute(
+                    "SELECT * FROM creative WHERE batch_id=? AND resource_name=? LIMIT 1",
+                    (batch["id"], resource_name),
+                ).fetchone()
+            if creative is None:
+                raise RuntimeError("v2 资源读数没有对应文案：%s / %s" %
+                                   (batch["task_name"], resource_name))
+            workspace_repo.add_resource_reading(
+                conn, batch["id"], creative["id"], fetch_id, fetched_at,
+                _int(row[5]), _int(row[6]),
+            )
+        return {
+            "activity_id": activity["id"],
+            "fetch_run_id": fetch_id,
+            "daily_metrics": len(day_rows),
+            "resource_readings": len(res_rows),
+        }
+    finally:
+        conn.close()
+
+
+def fetch_resource_rows(api, tasks, task_group=None, single_res=None):
     """资源级（对照/实验1/实验2）：一个任务一次请求。
 
     ⚠ 这个接口**不认日期参数**（真机试过 startDate/businessHappen/startTime 都不变），
     返回的是该任务整个投放期到此刻的累计值——所以它是"累计快照"，不是按天数据。
     `tasks` 用统一形状 [{"id","name","state"}]（见 `tasks_from_day_rows` / `group_tasks`）。
+
+    2026-10-13 加兜底（起因：KIRO D 桶转长期单后看板上那条一直是 0）：**AB测试=否 的单资源长期单**，
+    后台这个接口是按"实验组"给的，它没有实验组 → 真机返回 `{"total": 0, "list": []}`，
+    于是这条工单在判定 / 看板上等于不存在（**按天事实其实是好的**，只是没人读它）。
+    这类工单改从**工单级全量查询**取累计——不给日期时返回的就是累计值（真机核对过：长投 2363/1、
+    A-7 4141/6，与看板一致）——补一条单槽位读数。兜底那次查询只在真碰上时打一次。
+    `single_res`（工单名 → 那条复用资源名，见 `single_resource_map`）用来给这条读数写**真资源名**：
+    看板的「三套文案」是按资源名去索引文案原文的，写成工单名就只剩名字、看不到标题/摘要。
     """
     rows = []
+    cum = None                      # {任务 id: (曝光, 点击)}；需要兜底时才查（1 次请求）
     # 排序：任务按 id 升序（测试工单 id 更大，自然排到最后），任务内按资源 id 升序（= 对照/实验1/实验2）
     for t in sorted(tasks, key=lambda x: x.get("id") or 0):
         task_id, task_name = t.get("id"), t.get("name") or ""
@@ -222,19 +370,23 @@ def fetch_resource_rows(api, tasks):
         except Exception as e:
             log("      ⚠ 任务 %s 的资源级取不到：%s" % (task_id, e))
             continue
-        for it in sorted(data.get("list") or [], key=lambda x: x.get("resourceId") or 0):
+        items = data.get("list") or []
+        if not items and task_group:
+            if cum is None:
+                cum = {str(x.get("id")): (x.get("exposure"), x.get("click"))
+                       for x in query_tasks(api, task_group)}
+            e, c = cum.get(str(task_id), (None, None))
+            if e is not None:
+                res_name = (single_res or {}).get(task_name) or task_name
+                log("      · %s：资源级返回空（单资源 / 长期单）→ 用**工单级累计** %s / %s 补一条读数"
+                    % (task_name, e, c))
+                rows.append([str(task_id), task_name, "", "对照组", res_name, str(e), str(c)])
+                continue
+        for it in sorted(items, key=lambda x: x.get("resourceId") or 0):
             rows.append([str(task_id), task_name, str(it.get("resourceId", "")),
                          it.get("experimentName") or "", it.get("resourceName") or "",
                          str(it.get("exposure", "")), str(it.get("click", ""))])
     return rows
-
-
-def write_csv(columns, rows, path):
-    """utf-8 带 BOM：Excel 双击打开中文不乱码。"""
-    with open(path, "w", encoding="utf-8-sig", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(columns)
-        w.writerows(rows)
 
 
 def day_range(start, end):
@@ -281,15 +433,15 @@ def plan_days(date_from, date_to, last_day, campaign_start, today):
 
 
 class Browser:
-    """浏览器会话：playwright + 这个仓库的持久登录 profile（`REPO/.browser-profile`）。
+    """取数用的浏览器连接：**挂到公共浏览器上**（`browser_broker`），不自己起浏览器。
 
     - 命令行跑一次：`with Browser() as b: …`（开 → 用 → 关）。
-    - **看板服务（`web/app.py`）把它常驻**（2026-09-24 用户定）：双击 `web/start.bat` 起服务时开一只，
-      之后每次「刷新 / 取数」都复用同一个浏览器、同一条后台连接，关窗口才关——省掉每次
-      ≈1.7 秒的起/关浏览器开销。
+    - **看板服务（`web/app.py`）把它常驻**（2026-09-24 用户定）：双击 `web/start.bat` 起服务时挂上去，
+      之后每次「刷新 / 取数」都复用同一条连接——省掉每次 ≈1.7 秒的起/关浏览器开销。
 
-    ⚠ **一个 profile 同时只能被一个浏览器进程用**（系统会锁 profile 文件夹），所以同一时刻只许有一只
-      `Browser`；要手动跑命令行脚本、或重新登录（`wait_login.py`），先把看板窗口关掉。
+    ⚠ 公共浏览器是**独立进程**（2026-10-16 用户定）：本类只是"挂上去的一个连接"，`close()` 只断开
+      连接、**不关浏览器**（关了会把看板、建任务脚本一起带断）。以前"一个登录 profile 只能被一个
+      进程用 → 开建任务的浏览器就把看板挤掉"的问题就此消失。
     ⚠ playwright 的**同步接口不能跨线程**：谁 `start()` 的，就只能在那个线程里用（看板那边因此
       专门起了一个取数线程）。
     """
@@ -304,35 +456,34 @@ class Browser:
         return self._ctx
 
     def start(self):
-        """没开就开（已经开着就是空操作，直接复用）。"""
+        """挂上去（已经挂着就直接复用；连接断了就重挂）。"""
         if self._ctx is not None:
-            return self._ctx
+            try:
+                self._ctx.pages            # 探一下：浏览器被重启 / 崩了这里会抛
+                return self._ctx
+            except Exception:
+                self.close()               # 连接已死，扔掉重挂
+        broker.ensure("headed" if self.headed else "headless")
+        self._pw = sync_playwright().start()
         try:
-            self._pw = sync_playwright().start()
-            self._ctx = self._pw.chromium.launch_persistent_context(
-                user_data_dir=PROFILE, channel="msedge", headless=not self.headed,
-                no_viewport=True, args=["--start-maximized"],
-            )
+            self._ctx = broker.connect(self._pw)
         except Exception as e:
-            self.close()          # 别留半截状态：失败就当没开过
-            # 起不来最常见的两种原因，直接给人话，别甩一大坨 playwright 日志
+            self.close()          # 别留半截状态：失败就当没挂过
             raise RuntimeError(
-                "%s\n  浏览器起不来。多半是：① `.browser-profile` 这个登录 profile 已经被别的进程占着——"
-                "看板（web/app.py）窗口、命令行脚本、或者**第二个看板实例**（Windows 不会拦你起第二个，"
-                "2026-10-12 踩到：两个看板都绑 8770、抢同一只浏览器，一个正常另一个每次取数都报这句）"
-                "都在抢它；先确认只剩一个、把多余的那个关掉（残留的 Edge 与 `lockfile` 见 web/README）；"
-                "② 登录态过期——跑 automation/scripts/wait_login.py 重新登录。" % str(e).strip().splitlines()[0]
+                "%s\n  挂不上公共浏览器（CDP 127.0.0.1:%d）。多半是登录态过期——跑一次"
+                " automation/scripts/wait_login.py 重新登录（**不用关看板**）；"
+                "还是不行就 `python automation/scripts/browser_broker.py --status` 看它怎么了。"
+                % (str(e).strip().splitlines()[0], broker.PORT)
             ) from e
         return self._ctx
 
     def close(self):
-        """关浏览器 + 停 playwright；本来就没开也不报错。"""
-        for closer in (lambda: self._ctx and self._ctx.close(),
-                       lambda: self._pw and self._pw.stop()):
-            try:
-                closer()
-            except Exception:
-                pass
+        """**断开连接**（不是关浏览器——它是公共的，还归看板/脚本用）；本来就没挂也不报错。"""
+        try:
+            if self._pw is not None:
+                self._pw.stop()        # 只停 playwright：一停就断开 CDP，浏览器自己活着
+        except Exception:
+            pass
         self._pw = self._ctx = None
 
     def __enter__(self):
@@ -343,7 +494,7 @@ class Browser:
         self.close()
 
 
-def collect(ctx, task_group, days, known_tasks=0, note=log):
+def collect(ctx, task_group, days, known_tasks=0, note=log, single_res=None):
     """取数（**网络部分**，不落盘）：按天逐日查 + 资源级只查在投的工单。
 
     返回 (tasks, day_rows, res_rows, empty_days)。落库/落流水在 `persist()`。
@@ -376,55 +527,29 @@ def collect(ctx, task_group, days, known_tasks=0, note=log):
     if len(to_read) < len(tasks):
         note("      跳过 %d 个不在投的工单（只停它的累计读数；按天的数照常取）"
              % (len(tasks) - len(to_read)))
-    res_rows = fetch_resource_rows(api, to_read)
+    res_rows = fetch_resource_rows(api, to_read, task_group=task_group, single_res=single_res)
     note("      %d 行" % len(res_rows))
     return tasks, day_rows, res_rows, empty_days
 
 
-def persist(conn, cfg, cfg_path, task_group, tasks, day_rows, res_rows, start, end,
-            empty_days=(), label="", no_archive=False, note=log):
-    """落盘：台账库（唯一真相）+ 取数流水（原始存档），并把这次取回的数打到日志里。"""
-    activity_dir = campaign_mod.activity_dir(cfg_path)
-    data_root = os.path.join(activity_dir, "数据")
+def persist(v2_db_path, task_group, tasks, day_rows, res_rows, start, end,
+            empty_days=(), label="", mode="", note=log):
+    """把一次成功取数写入数据库 v2，并把摘要打到日志。"""
     now = datetime.datetime.now()
-    folder = now.strftime("%Y-%m-%d_%H%M") + (("_" + label) if label else "")
-    snap_dir = os.path.join(data_root, folder)
-
-    note("3/3 落盘（台账库 + 取数流水）…")
     fetched_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    span = sorted({r[0] for r in day_rows})
+    report = sync_v2(
+        v2_db_path, task_group, tasks, day_rows, res_rows,
+        start, end, mode, fetched_at,
+    )
+    note("3/3 入库：按天 %d · 资源读数 %d · fetch_run %d"
+         % (report["daily_metrics"], report["resource_readings"], report["fetch_run_id"]))
 
-    # ① 台账库（唯一真相）：工单维度先落，按天事实与资源读数随后 upsert/追加
-    perf_db.upsert_activity(conn, task_group, os.path.basename(activity_dir), cfg["label"])
-    perf_db.upsert_tasks(conn, task_group, tasks, fetched_at)
-    perf_db.upsert_daily(conn, [(str(r[1]), r[0], _int(r[4]), _int(r[5]), _int(r[6]), _int(r[7]),
-                                 fetched_at) for r in day_rows])
-    perf_db.add_resource_readings(conn, [(str(r[0]), str(r[2]), fetched_at, task_group, r[1], r[3],
-                                          r[4], _int(r[5]), _int(r[6])) for r in res_rows])
-    conn.commit()
-    db_days = perf_db.days(conn, task_group)
-    note("      台账：%d 条按天事实 · %d 条资源读数 · 活动共 %d 天（%s ~ %s）"
-         % (len(day_rows), len(res_rows), len(db_days), db_days[0], db_days[-1]))
-
-    # ② 取数流水（原始存档，可 diff）：落这次实际取回来的那几天
-    #    no_archive（看板「刷新今天」）跳过：刷新是可重复的查询，数据已进台账库，
-    #    不必一天堆一堆文件夹（用户 2026-09-20 定）
-    if no_archive:
-        note("      流水：--no-archive，跳过（只写台账库）")
-    else:
-        os.makedirs(snap_dir, exist_ok=True)
-        write_csv(DAY_COLUMNS, day_rows, os.path.join(snap_dir, "投放数据.csv"))
-        write_csv(RES_COLUMNS, res_rows, os.path.join(snap_dir, "资源级累计.csv"))
-    if not os.path.exists(os.path.join(data_root, "README.md")):
-        with open(os.path.join(data_root, "README.md"), "w", encoding="utf-8") as fh:
-            fh.write(README)
-
-    # 工单级：按天×任务打出来（含登录曝光/登录点击）
     note("---- 工单 × 日期 ----")
     i_name, i_exp, i_clk = 2, 4, 5
     for r in day_rows:
         note("  %s  %-46s 曝光 %6s | 点击 %4s | 登录曝光 %6s"
              % (r[0], str(r[i_name])[:46], r[i_exp], r[i_clk], r[6]))
-    span = sorted({r[0] for r in day_rows})
     # 这行是「**本次取回**的那几天」的合计，不是看板上的合计（看板合计＝库里全部天）——写明白，别混
     note("  本次取回 %d 天（%s ~ %s）合计：曝光 %d | 点击 %d"
          % (len(span), span[0] if span else "—", span[-1] if span else "—",
@@ -437,44 +562,44 @@ def persist(conn, cfg, cfg_path, task_group, tasks, day_rows, res_rows, start, e
     for r in res_rows:
         note("  %-44s %-8s 曝光 %6s | 点击 %4s" % (str(r[1])[:44], r[3], r[5], r[6]))
 
-    if no_archive:
-        note("取数流水：未落盘（--no-archive）")
-    else:
-        note("取数流水目录：%s" % snap_dir)
-        note("  投放数据.csv（%d 行）" % len(day_rows))
-        note("  资源级累计.csv（%d 行）" % len(res_rows))
+    note("取数记录：数据库 v2（fetch_run #%d）" % report["fetch_run_id"])
 
 
-def run(cfg, cfg_path, db_path, date_from=None, date_to=None, label="", no_archive=False,
+def run(activity_key, v2_db_path=None, date_from=None, date_to=None, label="",
         headed=False, note=log, browser=None):
     """完整取一次数——**命令行和看板服务（`web/app.py`）都走这一条**。
 
     `browser` 给了就复用它那只常驻浏览器（看板服务传进来）；没给就自己开一只、跑完关掉（命令行）。
     成功返回一句摘要；失败抛异常（**不落任何盘**，见文件头"只读边界"）。
     """
-    task_group = cfg["campaign"]["taskGroupName"]
-    conn = perf_db.connect(db_path)
+    v2_db_path = v2_db_path or workspace_repo.V2_DB
+    conn = workspace_repo.connect(v2_db_path)
     try:
+        activity = workspace_repo.get_activity(conn, activity_key)
+        if activity is None:
+            raise RuntimeError("数据库里没有活动：%s" % activity_key)
         today = datetime.date.today().isoformat()
-        last = perf_db.last_day(conn, task_group)
+        last = workspace_repo.activity_last_day(conn, activity["id"])
         start, end, mode = plan_days(date_from, date_to, last,
-                                     cfg["taskOrder"]["deliveryDate"]["start"], today)
+                                     activity["started_on"], today)
         if end < start:
             raise RuntimeError("结束日 %s 早于起始日 %s（日期填反了）" % (end, start))
         days = day_range(start, end)
 
-        note("取数：%s | 任务组：%s | 区间：%s ~ %s（%d 天）| 模式：%s | 标签：%s"
-             % (cfg["label"], task_group, start, end, len(days), mode, label or "-"))
-        note("      台账：%s（本活动 %s）"
-             % (db_path, ("库里已有 %d 天" % len(perf_db.days(conn, task_group))) if last
-                else "空库 → 全量回填"))
+        note("取数：%s | 区间：%s ~ %s（%d 天）| 模式：%s | 标签：%s"
+             % (activity["display_name"], start, end, len(days), mode, label or "-"))
+        note("      数据库：%s（本活动 %d 个批次%s）"
+             % (v2_db_path, workspace_repo.count_bucket_batches(conn, activity["id"]),
+                "，数据到 %s" % last if last else "，空库 → 全量回填"))
 
         own = browser is None                                   # 自己开的就自己关
         by = browser if browser is not None else Browser(headed=headed)
         by.start()                                              # 常驻的那只：没起就起、起着就复用
         try:
             tasks, day_rows, res_rows, empty_days = collect(
-                by.ctx, task_group, days, len(perf_db.tasks(conn, task_group)), note)
+                by.ctx, activity_key, days,
+                workspace_repo.count_bucket_batches(conn, activity["id"]), note,
+                single_res=workspace_repo.single_resource_map(conn, activity["id"]))
         finally:
             if own:
                 by.close()
@@ -482,8 +607,8 @@ def run(cfg, cfg_path, db_path, date_from=None, date_to=None, label="", no_archi
         if not day_rows:
             raise RuntimeError("区间内所有日期都没有数据（%s ~ %s）" % (start, end))
 
-        persist(conn, cfg, cfg_path, task_group, tasks, day_rows, res_rows, start, end,
-                empty_days=empty_days, label=label, no_archive=no_archive, note=note)
+        persist(v2_db_path, activity_key, tasks, day_rows, res_rows, start, end,
+                empty_days=empty_days, label=label, mode=mode, note=note)
         return "取数完成（按天 %d 行 %s ~ %s；资源级累计 %d 行）" % (
             len(day_rows), start, end, len(res_rows))
     finally:
@@ -492,82 +617,19 @@ def run(cfg, cfg_path, db_path, date_from=None, date_to=None, label="", no_archi
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True, help="整活动 YAML")
+    ap.add_argument("--activity", required=True, help="数据库里的任务组名")
     ap.add_argument("--from", dest="date_from", default=None, help="起始日 YYYY-MM-DD（默认：库里最近有数据那天）")
     ap.add_argument("--to", dest="date_to", default=None,
                     help="结束日 YYYY-MM-DD（默认昨天；要今天那半截：--from 今天 --to 今天）")
     ap.add_argument("--label", default="", help="这次取数对应哪次调整，如「调整前」")
-    ap.add_argument("--no-archive", action="store_true",
-                    help="不落取数流水（只写台账库）——看板上的「刷新今天」用它，免得一天堆一堆文件夹")
     ap.add_argument("--headed", action="store_true", help="显示浏览器窗口")
-    ap.add_argument("--db", default=perf_db.DEFAULT_DB, help="台账库路径（默认 activities/_db/投放数据.db）")
+    ap.add_argument("--v2-db", default=workspace_repo.V2_DB, help="数据库 v2 路径")
     args = ap.parse_args()
 
-    cfg = campaign_mod.load_or_exit(args.config)
     try:
-        summary = run(cfg, args.config, args.db, args.date_from, args.date_to, args.label,
-                      args.no_archive, args.headed, log)
+        summary = run(args.activity, args.v2_db, args.date_from, args.date_to,
+                      args.label, args.headed, log)
         log("RESULT: %s" % summary)
-    except Exception as e:
-        # 只读、失败不落盘：宁可什么都没有，也不要一份半截的假数据
-        log("  ✗ %s" % e)
-        log("RESULT: 取数失败（没有生成任何快照）")
-        sys.exit(1)
-        log("4/4 落盘（台账库 + 取数流水）…")
-        fetched_at = now.strftime("%Y-%m-%d %H:%M:%S")
-
-        # ① 台账库（唯一真相）：工单维度先落，按天事实与资源读数随后 upsert/追加
-        perf_db.upsert_activity(conn, task_group, os.path.basename(activity_dir), cfg["label"])
-        perf_db.upsert_tasks(conn, task_group, tasks, fetched_at)
-        perf_db.upsert_daily(conn, [(str(r[1]), r[0], _int(r[4]), _int(r[5]), _int(r[6]), _int(r[7]),
-                                     fetched_at) for r in day_rows])
-        perf_db.add_resource_readings(conn, [(str(r[0]), str(r[2]), fetched_at, task_group, r[1], r[3],
-                                              r[4], _int(r[5]), _int(r[6])) for r in res_rows])
-        conn.commit()
-        db_days = perf_db.days(conn, task_group)
-        log("      台账：%d 条按天事实 · %d 条资源读数 · 活动共 %d 天（%s ~ %s）"
-            % (len(day_rows), len(res_rows), len(db_days), db_days[0], db_days[-1]))
-
-        # ② 取数流水（原始存档，可 diff）：落这次实际取回来的那几天
-        #    --no-archive（看板「刷新今天」）跳过：刷新是可重复的查询，数据已进台账库，
-        #    不必一天堆一堆文件夹（用户 2026-09-20 定）
-        if args.no_archive:
-            log("      流水：--no-archive，跳过（只写台账库）")
-        else:
-            os.makedirs(snap_dir, exist_ok=True)
-            write_csv(DAY_COLUMNS, day_rows, os.path.join(snap_dir, "投放数据.csv"))
-            write_csv(RES_COLUMNS, res_rows, os.path.join(snap_dir, "资源级累计.csv"))
-        if not os.path.exists(os.path.join(data_root, "README.md")):
-            with open(os.path.join(data_root, "README.md"), "w", encoding="utf-8") as fh:
-                fh.write(README)
-
-        # 工单级：按天×任务打出来（含登录曝光/登录点击）
-        log("---- 工单 × 日期 ----")
-        i_name, i_exp, i_clk = 2, 4, 5
-        for r in day_rows:
-            log("  %s  %-46s 曝光 %6s | 点击 %4s | 登录曝光 %6s"
-                % (r[0], str(r[i_name])[:46], r[i_exp], r[i_clk], r[6]))
-        span = sorted({r[0] for r in day_rows})
-        # 这行是「**本次取回**的那几天」的合计，不是看板上的合计（看板合计＝库里全部天）——写明白，别混
-        log("  本次取回 %d 天（%s ~ %s）合计：曝光 %d | 点击 %d"
-            % (len(span), span[0] if span else "—", span[-1] if span else "—",
-               sum(int(r[i_exp] or 0) for r in day_rows),
-               sum(int(r[i_clk] or 0) for r in day_rows)))
-        if empty_days:
-            log("  （无数据的日期：%s）" % "、".join(empty_days))
-
-        log("---- 资源级累计（对照 / 实验1 / 实验2）----")
-        for r in res_rows:
-            log("  %-44s %-8s 曝光 %6s | 点击 %4s" % (str(r[1])[:44], r[3], r[5], r[6]))
-
-        if args.no_archive:
-            log("取数流水：未落盘（--no-archive）")
-        else:
-            log("取数流水目录：%s" % snap_dir)
-            log("  投放数据.csv（%d 行）" % len(day_rows))
-            log("  资源级累计.csv（%d 行）" % len(res_rows))
-        log("RESULT: 取数完成（按天 %d 行 %s ~ %s；资源级累计 %d 行）"
-            % (len(day_rows), start, end, len(res_rows)))
     except Exception as e:
         # 只读、失败不落盘：宁可什么都没有，也不要一份半截的假数据
         log("  ✗ %s" % e)

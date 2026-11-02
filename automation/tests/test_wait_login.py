@@ -26,7 +26,7 @@ class _Page:
     """假页面：goto 后把 url 换成给定值（模拟被重定向到 /login）。"""
 
     def __init__(self, url, composer_count):
-        self.url = ""
+        self.url = url
         self._target = url
         self._composer = composer_count
         self.visited = []
@@ -55,9 +55,52 @@ class ProbeDatabiTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("/login", why)
 
+    def test_登录后停在projects也算成功(self):
+        page = _Page("https://data.csdn.net/projects", 0)
+        ok, why = wl.probe_databi(page, navigate=False)
+        self.assertTrue(ok, why)
+
+    def test_对话页没有输入框仍算未就绪(self):
+        page = _Page("https://data.csdn.net/chat", 0)
+        ok, why = wl.probe_databi(page, navigate=False)
+        self.assertFalse(ok, why)
+
+    def test_检查当前页时不刷新用户表单(self):
+        page = _Page("https://data.csdn.net/login", 0)
+        ok, _ = wl.probe_databi(page, navigate=False)
+        self.assertFalse(ok)
+        self.assertEqual(page.visited, [])
+
     def test_两个站各有默认页(self):
         self.assertIn("mp-admin.csdn.net", wl.DEFAULT_URL)
         self.assertIn("data.csdn.net", wl.DATABI_URL)
+
+
+class ProbeAdminTest(unittest.TestCase):
+    class _Page:
+        def __init__(self, identity):
+            self.identity = identity
+
+        def evaluate(self, js):
+            return self.identity
+
+    def test_有身份信息才算登录完成(self):
+        page = self._Page({
+            "userName": "lihang1", "hasToken": True, "hasUser": True,
+            "url": "https://mp-admin.csdn.net/",
+        })
+        ok, why = wl.probe_admin(page)
+        self.assertTrue(ok)
+        self.assertIn("lihang1", why)
+
+    def test_旧会话但无用户名不算登录完成(self):
+        page = self._Page({
+            "userName": "", "hasToken": False, "hasUser": False,
+            "url": "https://mp-admin.csdn.net/",
+        })
+        ok, why = wl.probe_admin(page)
+        self.assertFalse(ok)
+        self.assertIn("userName=''", why)
 
 
 if __name__ == "__main__":

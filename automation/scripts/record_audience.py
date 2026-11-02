@@ -19,11 +19,11 @@ import sys
 import time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", r"D:\playwright-browsers")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-PROFILE = r"D:\Codex_WorkingSpace\ad_management\.browser-profile"
+import browser_broker as broker  # noqa: E402
+
 START_URL = "https://mp-admin.csdn.net/silkroad-dist/#/distribute/resource/list?channelType=page"
 
 INIT_JS = r"""(() => {
@@ -111,14 +111,12 @@ def main():
             log("  probe:", info.get("text"))
 
     ctx = None
+    page = None
     try:
         with sync_playwright() as p:
-            ctx = p.chromium.launch_persistent_context(
-                user_data_dir=PROFILE,
-                channel="msedge",
-                headless=False,
-                viewport={"width": 1680, "height": 1000},
-            )
+            # 挂公共浏览器（有窗口）——不再自己起一只抢 profile（2026-10-16 用户定）
+            broker.ensure("headed")
+            ctx = broker.connect(p)
             ctx.add_init_script(INIT_JS)
 
             def on_new_page(pg):
@@ -128,7 +126,7 @@ def main():
                     pass
 
             ctx.on("page", on_new_page)
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page = ctx.new_page()
             page.set_default_timeout(8000)
             page.goto(START_URL, wait_until="domcontentloaded", timeout=25000)
             page.wait_for_timeout(1500)
@@ -165,11 +163,11 @@ def main():
                 time.sleep(0.4)
     finally:
         log("共记录事件:%d | 输出:%s" % (count, out))
-        if ctx:
+        if ctx and page:
             try:
-                ctx.close()
+                page.close()      # 只关自己开的页；公共浏览器留着（别 ctx.close()）
             except Exception as e:
-                log("ctx.close:", e)
+                log("page.close:", e)
 
 
 if __name__ == "__main__":

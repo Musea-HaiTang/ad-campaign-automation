@@ -1,781 +1,1863 @@
-var DATA = null, DAYS = [], BK = [], state = null;
-var ACTS = [], AID = null;                      // 活动清单 + 当前看的活动（服务版才有）
-var LS_KEY = "ad_dashboard_activity";           // 记住上次看的是哪个活动
-var FRESH = null, FRESH_KEY = "";               // 数据新鲜度（服务版：最近取数 / 自动刷新）
-var TODO = null;                                // 待复盘清单（/api/todo，**跨活动**；2026-09-30 加）
-function boot(data, keep){
-  DATA = data;
-  DAYS = data.days || [];
-  BK = data.buckets || [];
-  document.title = "投放看板 · " + (data.label || "");
-  var v = { open:null, mode:"bucket", exp:{}, bs: BK.length ? BK[0].id : null };
-  if(keep){                                  // 刷新后保住用户选的桶/口径（2026-10-08 起没有"所选批次"了）
-    if(keep.bs && bById(keep.bs)) v.bs = keep.bs;
-    if(keep.mode) v.mode = keep.mode;
-  }
-  state = { open: v.open, mode: v.mode, exp: v.exp, bs: v.bs,
-            mstyle: "auto", mctx: null };
-  renderAll();
-}
-function $(id){ return document.getElementById(id); }
-function bById(id){ for(var i=0;i<BK.length;i++){ if(BK[i].id===id) return BK[i]; } return null; }
-// 一个桶"当天的量"和"哪些天算有量"，口径都在 payload 里算好了（perf_payload）——
-function fmt(n){ return Math.round(n).toLocaleString("en-US"); }
-function pct(c, e){ return e ? (c/e*100).toFixed(2)+"%" : "—"; }
-function dayTotal(){                           // 全活动最新一天（今天）合计——放页头那一行
-  var day = DAYS.length ? DAYS[DAYS.length - 1] : null;
-  if(!day) return null;
-  var e = 0, c = 0;
-  (DATA.orders || []).forEach(function(o){
-    var v = ((DATA.orderCells || {})[o.name] || {})[day];
-    if(v){ e += v[0]; c += v[1]; }
-  });
-  return {day: day, e: e, c: c};
-}
-function renderHead(){
-  var last = DAYS.length ? DAYS[DAYS.length-1] : "—";
-  $("ttl").textContent = DATA.label;
-  $("snaptag").textContent = "数据至 " + last;
-  var bits = ["数据区间 " + DAYS[0] + " ~ " + last + "（" + DAYS.length + " 天）"];
-  var d = dayTotal();
-  if(d) bits.push("今日（" + d.day.slice(5) + "）曝光 " + fmt(d.e) + " · 点击 " + fmt(d.c));
-  if(FRESH){
-    bits.push(FRESH.lastFetchTime ? ("最近取数 " + FRESH.lastFetchTime) : "还没取过数");
-    if(FRESH.auto && FRESH.auto.minutes){
-      bits.push("自动刷新 每 " + FRESH.auto.minutes + " 分钟" +
-                (FRESH.auto.at ? ("（上次 " + FRESH.auto.at + (FRESH.auto.ok === false ? " 失败" : "") + "）") : ""));
-    }else if(FRESH.auto){
-      bits.push("自动刷新 已关");
-    }
-  }
-  $("subline").innerHTML = bits.join(" ｜ ");
-}
+(function () {
+  "use strict";
 
-function freshTick(){                            // 服务版：60 秒问一次"数据是不是被自动刷新更新了"
-  if(window.__DATA__ || !AID) return;
-  fetch("api/fetch/status" + actQuery(), { cache:"no-store" }).then(function(r){ return r.json(); }).then(function(st){
-    var key = [(st.db || {}).last, st.lastFetchTime, (st.auto || {}).at, st.running].join("|");
-    var changed = FRESH_KEY && key !== FRESH_KEY;
-    FRESH_KEY = key;
-    FRESH = {lastFetchTime: st.lastFetchTime || "", auto: st.auto || null};
-    if(DATA) renderHead();
-    if(changed && !st.running){                // 自动刷新跑完 → 顺手更新页面 **和角标**
-      // 2026-10-09 修：以前只换表格、不重问待复盘清单，角标会停在自动刷新开始前那一刻的数字
-      // （表格里三条"过门槛 · 未达标"，角标却显示 1）。
-      loadFromServer(state ? currentView() : null);
-      loadTodo();
-    }
-  }).catch(function(){});
-}
+  var DATA = null;
+  var DAYS = [];
+  var BUCKETS = [];
+  var BATCHES = [];
+  var FIRST = "";
+  var LAST = "";
+  var ACTIVE_ACTIVITY = null;
+  var state = null;
+  var ACTIVITIES = [];
+  var AID = null;
+  var FRESH_KEY = "";
+  var LS_KEY = "ad_dashboard_activity";
+  var DATE_PICKER = null;
+  var MODAL_TIMER = null;
 
-// ---- 分桶统计（2026-10-08 改）：一行 = 一个桶**最新那个任务**，各桶有自己的当前批 ----
-// 判定规则在 automation/scripts/judging.py（命令行 judge_batch 和这里共用一份），页面只负责画。
-// 桶维度（当前批 / 回退批 / 批次史）在 perf_payload.bucket_view() 里算好，页面不再自己推。
-function batchById(id){
-  var bs = DATA.batches || [];
-  for(var i=0;i<bs.length;i++){ if(bs[i].id === id) return bs[i]; }
-  return null;
-}
-function copyOf(res){ return (DATA.copy || {})[res] || null; }      // 资源名 → 文案原文
-function plain(s){ return String(s == null ? "" : s).replace(/\*\*/g, ""); }
-function taskOf(bk){                                               // 该桶「最新那个任务」= 它自己当前批那一行
-  if(!bk) return null;
-  var list = bk.batches || [];
-  for(var i=0;i<list.length;i++){ if(list[i].batch === bk.currentBatch) return list[i]; }
-  return list.length ? list[list.length-1] : null;
-}
-function hl(text, word){                       // 飘红：直接把词标在文案里（不再单起一行）
-  var s = esc(text == null ? "" : text);
-  if(!word) return s;
-  var w = esc(word);
-  var re = new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
-  return s.replace(re, '<span class="hl">' + w + '</span>');
-}
-function slotName(res){                         // `…A类 · 对照-4` → `对照`
-  return String(res || "").split(" · ").pop().replace(/-\d+$/, "");
-}
-function slotNames(list){                       // 按槽位顺序排列（别按点击数，读起来才顺）
-  var order = ["对照", "实验1", "实验2"];
-  return (list || []).map(slotName).sort(function(a, b){
-    var ia = order.indexOf(a), ib = order.indexOf(b);
-    return (ia < 0 ? 9 : ia) - (ib < 0 ? 9 : ib);
-  }).join("、");
-}
-function topicOf(j){                            // 工单名里的受众人群：`…-A类 · AI 编程 / Agent 工具-6` → 中间那段
-  if(!j || !j.task) return "";
-  var parts = String(j.task).split(" · ");
-  return parts.length > 1 ? parts[1].replace(/-\d+$/, "") : "";
-}
-// 桶的显示（2026-10-12 用户定：产品桶"名字就写产品名"）：判据与 naming.is_product_bucket 一致
-//   —— id 不是单个字母 = 产品桶（WorkBuddy企业版 / TokenHub / 智能体开发平台）。
-//   ① 那个 18px 的圆点原来是塞**整个 id** 的，字母桶（A/B/C）刚好一个字母，产品桶就直接糊成一团
-//      （看着像个错图标）→ 改成取一个字：有英文用首字母、全中文用首字。
-//   ② 桶列原来写的是 topic（"WorkBuddy 企业版（腾讯企业智能体）"这种长句）→ 产品桶只留产品名，
-//      括号里的定位说明挪到悬停 title。字母桶的 topic（"A类 · 创意设计"）原样不动。
-function isProductBucket(bk){
-  return !/^[A-Za-z]$/.test(String((bk && bk.id) || ""));
-}
-function dotText(bk){
-  var s = String((bk && bk.id) || "");
-  if(!isProductBucket(bk)) return s;
-  var m = s.match(/[A-Za-z]/);
-  return m ? m[0].toUpperCase() : (s.charAt(0) || "?");
-}
-function bucketLabel(bk){
-  var t = (bk && bk.topic) || ("桶 " + ((bk && bk.id) || ""));
-  if(!isProductBucket(bk)) return t;
-  return t.replace(/（[^）]*）\s*$/, "").trim() || t;
-}
-function renderBuckets(){                      // 主表：一行 = 一个桶**最新那个任务**（各桶批次可以不同）
-  var box = $("buckets");
-  if(!box) return;
-  var hasTh = !!DATA.thresholds && Object.keys(DATA.thresholds).length > 0;
-  // 桶列 17% → 20%（2026-10-12）：产品桶的桶名比字母桶长，17% 会折成两行；文案列让 3%
-  var h = '<table><colgroup><col style="width:20%"><col style="width:22%"><col style="width:10%">' +
-          '<col style="width:11%"><col style="width:12%"><col style="width:25%"></colgroup>' +
-          '<thead><tr><th>桶</th><th class="c">' + (hasTh ? "曝光 / 门槛" : "曝光") +
-          '</th><th class="n">点击</th><th class="n">点击率</th><th>判定</th>' +
-          '<th>文案 / 动作</th></tr></thead><tbody>';
-  BK.forEach(function(bk){
-    var j = taskOf(bk);
-    if(!j) return;
-    var th = (bk.threshold != null) ? bk.threshold : j.threshold;
-    var e = j.exposure || 0, c = j.click || 0;
-    var p = th ? Math.min(100, e / th * 100) : 0;
-    var badge = !hasTh ? '<span class="badge dim">—</span>'
-              : (!j.task ? '<span class="badge dim">待起投</span>'
-              : (j.pass ? '<span class="badge ok">达标</span>'
-              : (j.ready ? '<span class="badge warn">过门槛 · 未达标</span>'
-                         : '<span class="badge dim">未到门槛</span>')));
-    var act = '<span class="badge dim">—</span>';
-    if(j.action){                               // 调整过 → 写**调整动作**（人定的，`配置/复盘动作.yaml`）
-      act = '<span class="badge hi">调整动作</span> 留 ' + ((j.action.keep || []).join("、") || "—") +
-            ' ｜ 下 ' + ((j.action.drop || []).join("、") || "—") +
-            (j.action.at ? ' <span class="hint">' + esc(j.action.at) + '</span>' : '');
-      if((j.action.changed || []).length) act += ' <span class="badge warn">数据已变</span>';
-      if(j.action.note) act += ideaBtn(j.batch, bk.id);   // 调整思路收进图标弹窗（2026-09-30 用户定）
-    } else if(hasTh && j.ready){                // 没调整 → 写**建议动作**（规则算的）
-      act = '<span class="badge dim">建议动作</span> <b class="actkeep">留 ' +
-            (slotNames(j.keep) || "—") + '</b> ｜ <span class="actdrop">下 ' +
-            (slotNames(j.drop) || "—") + '</span>';
-    } else if(hasTh){                            // 没调整 + 还没到门槛 → 建议也是**继续观察**（不写“—”）
-      act = '<span class="badge dim">建议动作</span> ' + esc(j.conclusion || "继续观察");
-    }
-    h += '<tr class="mainrow" data-cmp="' + bk.id + '|' + esc(j.batch) + '" title="看三条文案的对比">' +
-         '<td><span class="mkdot" style="background:' + bk.color + '">' + esc(dotText(bk)) + '</span> ' +
-           '<span title="' + esc(bk.topic || "") + '">' + esc(bucketLabel(bk)) + '</span></td>' +
-         '<td class="c" style="white-space:nowrap">' +
-           (th ? '<span class="barwrap" style="width:100px"><span class="bar" style="width:' +
-             p.toFixed(1) + '%;background:' + bk.color + '"></span></span> <span class="num">' + fmt(e) +
-             ' / ' + fmt(th) + '</span>' : '<span class="num">' + fmt(e) + '</span>') + '</td>' +
-         '<td class="n num">' + fmt(c) + '</td>' +
-         '<td class="n num">' + pct(c, e) + '</td>' +
-         '<td>' + badge + '</td><td>' + act + '</td></tr>';
-  });
-  box.innerHTML = h + '</tbody></table>';
-}
+  var DATE_CHARTS = [
+    ["trend", "趋势"],
+    ["composition", "点击构成"],
+    ["heatmap", "异常热力"],
+    ["small", "分桶小倍图"]
+  ];
+  var BATCH_CHARTS = [
+    ["trend", "批次趋势"],
+    ["bars", "批次对比"],
+    ["bullet", "门槛完成度"]
+  ];
+  var OTHER = { id: "other", name: "其他桶", color: "#94A3B8" };
 
-// ---- 批次之间（2026-09-28）：图随「桶级 / 资源级」切；表格恒为一批一行，点行展开（可多开）----
-var SLOT_COLORS = ["#8B5CF6", "#2563EB", "#14B8A6"];   // 对照 / 实验1 / 实验2（紫 / 蓝 / 青）
-var SLOT_ORDER = {"对照组": 0, "实验组1": 1, "实验组2": 2};
-function groupsBySlot(gs){                     // 槽位固定顺序（对照→实验1→实验2），颜色永远对得上
-  return (gs || []).slice().sort(function(a, b){
-    var ia = SLOT_ORDER[a.label] == null ? 9 : SLOT_ORDER[a.label];
-    var ib = SLOT_ORDER[b.label] == null ? 9 : SLOT_ORDER[b.label];
-    return ia - ib;
-  });
-}
-function seriesOf(bid){                        // 该桶的批次史（payload 算好的），**最新 → 最老**
-  var bk = bById(bid);
-  if(!bk) return [];
-  return (bk.batches || []).map(function(x){
-    return {label: x.label, batch: x.batch, start: x.start, cur: x.batch === bk.currentBatch,
-            e: x.exposure || 0, c: x.click || 0, groups: groupsBySlot(x.groups || [])};
-  }).filter(function(s){ return s.e || s.c || s.groups.length; }).reverse();
-}
-function renderBatchStats(){
-  var box = $("batchstats");
-  if(!box) return;
-  var mc = $("ctlmode");
-  if(mc) mc.innerHTML = [["bucket","桶级"],["copy","资源级"]].map(function(m){
-    return '<button class="fbtn'+(state.mode === m[0] ? " on" : "")+'" data-mode="'+m[0]+'">'+m[1]+'</button>';
-  }).join("");
-  var ctl = $("ctlbs");
-  if(ctl) ctl.innerHTML = BK.map(function(b){
-    return '<button class="fbtn'+(state.bs === b.id ? " on" : "")+'" data-bs="'+b.id+'">'+b.id+'</button>';
-  }).join("");
-  var bk = bById(state.bs);
-  var series = seriesOf(state.bs);
-  if(!bk || !series.length){ box.innerHTML = '<p class="hint">这个桶还没有可比的批次。</p>'; return; }
-  box.innerHTML = batchChart(series, bk) + batchTable(series, bk);
-}
-function niceMax(v){                           // 纵轴取整（1/2/5 × 10^k 往上找），刻度别出现 3.67 这种
-  if(v <= 4) return Math.max(1, Math.ceil(v));
-  var p = Math.pow(10, Math.floor(Math.log(v) / Math.LN10)), f = v / p;
-  var m = f <= 1 ? 1 : (f <= 2 ? 2 : (f <= 5 ? 5 : 10));
-  return m * p;
-}
-function batchChart(series, bk){               // 柱 = 点击；柱顶留空放数字；x 轴：槽位 / 批次 / 曝光
-  var copyMode = state.mode === "copy";
-  var W = 980, H = 226, x0 = 64, x1 = 930, yb = 152, yt = 30, top = 16;
-  var n = Math.max(series.length, 1), gw = (x1 - x0) / n;
-  var maxV = 0;
-  series.forEach(function(s){
-    if(copyMode) s.groups.forEach(function(g){ maxV = Math.max(maxV, g.c); });
-    else maxV = Math.max(maxV, s.c);
-  });
-  var axis = niceMax(maxV);
-  var s2 = ['<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="'+H+'" role="img" aria-label="'+
-            bk.id+' 桶各批次点击">'];
-  s2.push('<line x1="'+x0+'" y1="'+yb+'" x2="'+x1+'" y2="'+yb+'" stroke="#E2E8F0"/>');
-  for(var i = 1; i <= 3; i++){
-    var y = yb - (yb - yt - top) * i / 3;
-    s2.push('<line x1="'+x0+'" y1="'+y.toFixed(1)+'" x2="'+x1+'" y2="'+y.toFixed(1)+'" stroke="#F1F5F9"/>');
-    s2.push('<text x="'+(x0-10)+'" y="'+(y+3.5).toFixed(1)+'" text-anchor="end" font-size="10.5" fill="#94A3B8">'+
-            fmt(axis*i/3)+'</text>');
-  }
-  s2.push('<text x="'+(x0-10)+'" y="'+(yb+3.5)+'" text-anchor="end" font-size="10.5" fill="#94A3B8">0</text>');
-  var bw = copyMode ? Math.min(24, gw*0.72/4) : Math.min(46, Math.max(22, gw*0.42));
-  series.forEach(function(st, i){
-    var gx = x0 + gw*(i + 0.5);
-    var bars = copyMode ? st.groups.map(function(g, k){ return {g: g, k: k}; }) : [{g: null, k: 0}];
-    var gap = 6, full = bars.length*bw + (bars.length-1)*gap, left = gx - full/2;
-    bars.forEach(function(bd, k){
-      var v = bd.g ? bd.g.c : st.c;
-      var hgt = axis ? (yb - yt - top) * Math.min(1, v/axis) : 0;
-      var x = left + k*(bw+gap);
-      var col = copyMode ? SLOT_COLORS[bd.k % 3] : (st.cur ? "#1D4ED8" : "#60A5FA");
-      s2.push('<rect x="'+x.toFixed(1)+'" y="'+(yb-hgt).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+
-              Math.max(1.5, hgt).toFixed(1)+'" rx="3" fill="'+col+'"><title>'+esc(st.label)+' '+
-              esc((bd.g && bd.g.label) || (bk.id+" 桶"))+'：点击 '+fmt(v)+' / 曝光 '+
-              fmt(bd.g ? bd.g.e : st.e)+'</title></rect>');
-      if(v) s2.push('<text x="'+(x+bw/2).toFixed(1)+'" y="'+(yb-hgt-6).toFixed(1)+'" text-anchor="middle" '+
-                    'font-size="10.5" fill="#475569">'+fmt(v)+'</text>');
-      if(copyMode) s2.push('<text x="'+(x+bw/2).toFixed(1)+'" y="'+(yb+14)+'" text-anchor="middle" '+
-                           'font-size="10" fill="#94A3B8">'+esc(((bd.g && bd.g.label) || "").replace("组",""))+'</text>');
+  function $(id) { return document.getElementById(id); }
+
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"]/g, function (char) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[char];
     });
-    s2.push('<text x="'+gx.toFixed(1)+'" y="'+(yb + (copyMode ? 31 : 18))+'" text-anchor="middle" '+
-            'font-size="11.5" fill="'+(st.cur ? "#1E293B" : "#64748B")+'">'+esc(st.label)+'</text>');
-    s2.push('<text x="'+gx.toFixed(1)+'" y="'+(yb + (copyMode ? 46 : 33))+'" text-anchor="middle" '+
-            'font-size="10" fill="#B6C0CE">'+fmt(st.e)+' 曝光</text>');
-  });
-  s2.push('</svg>');
-  return s2.join("");
-}
-function batchTable(series, bk){
-  var maxC = 1;
-  series.forEach(function(s){ maxC = Math.max(maxC, s.c); });
-  var h = '<table style="table-layout:fixed"><colgroup><col style="width:30%"><col style="width:16%">' +
-          '<col style="width:26%"><col style="width:28%"></colgroup><thead><tr><th>批次</th><th>起投</th>' +
-          '<th class="n">曝光</th><th class="n">点击</th></tr></thead><tbody>';
-  series.forEach(function(st){
-    var key = st.batch === null ? "未归类" : st.batch;
-    var open = !!state.exp[key];
-    h += '<tr class="brow' + (st.cur ? " cur" : "") + '" data-bexp="' + key + '" style="cursor:pointer">' +
-         '<td>' + esc(st.label) + (st.cur ? ' <span class="badge hi">当前批</span>' : '') +
-         '</td><td>' + (st.start || "—") + '</td><td class="n num">' + fmt(st.e) +
-         '</td><td class="n num">' + fmt(st.c) + ' <span class="barwrap" style="width:70px"><span class="bar" ' +
-         'style="width:' + (st.c/maxC*100).toFixed(1) + '%;background:' + bk.color + '"></span></span>' +
-         '</td></tr>';
-    if(!open) return;
-    st.groups.forEach(function(g, k){
-      h += '<tr class="crow click"' + (st.batch ? ' data-cmp="' + bk.id + '|' + esc(st.batch) + '"' : '') +
-           ' title="看三条文案的对比"><td><span class="slotdot" style="background:' + SLOT_COLORS[k % 3] + '"></span>' +
-           esc(g.label || g.res) + '<div class="hint">' + esc(g.title || g.res) + '</div></td>' +
-           '<td></td><td class="n num">' + fmt(g.e) + '</td><td class="n num">' + fmt(g.c) + '</td></tr>';
+  }
+
+  function fmt(value) {
+    return Number(value || 0).toLocaleString("zh-CN");
+  }
+
+  function pct(value) {
+    return (Number(value || 0) * 100).toFixed(2) + "%";
+  }
+
+  function pp(value) {
+    return (value >= 0 ? "+" : "") + (Number(value || 0) * 100).toFixed(2) + "pp";
+  }
+
+  function short(date) {
+    return date ? date.slice(5).replace("-", "/") : "—";
+  }
+
+  function full(date) {
+    return date ? date.replaceAll("-", ".") : "—";
+  }
+
+  function weekday(dateText) {
+    return "日一二三四五六"[new Date(dateText + "T00:00:00").getDay()];
+  }
+
+  function dateKey(date) {
+    var year = date.getFullYear();
+    var month = String(date.getMonth() + 1).padStart(2, "0");
+    var day = String(date.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
+  }
+
+  function dateText(value) {
+    return value ? value.replaceAll("-", "/") : "—";
+  }
+
+  function monthKey(value) {
+    return value ? value.slice(0, 7) : "";
+  }
+
+  function shiftMonth(value, delta) {
+    var parts = value.split("-");
+    var date = new Date(Number(parts[0]), Number(parts[1]) - 1 + delta, 1);
+    return dateKey(date).slice(0, 7);
+  }
+
+  function monthText(value) {
+    var parts = value.split("-");
+    return Number(parts[0]) + " 年 " + Number(parts[1]) + " 月";
+  }
+
+  function adaptPayload(payload) {
+    var days = payload.days || [];
+    var partialDays = new Set(payload.partialDays || []);
+    var buckets = payload.buckets || [];
+    var bucketCells = payload.bucketCells || {};
+    var daily = days.map(function (dateText) {
+      var cells = buckets.map(function (bucket) {
+        var values = (((bucketCells[bucket.id] || {}).all || {})[dateText]) || [0, 0, 0, 0];
+        var exposure = Number(values[0] || 0);
+        var clicks = Number(values[1] || 0);
+        return {
+          id: bucket.id,
+          exposure: exposure,
+          clicks: clicks,
+          ctr: exposure ? clicks / exposure : 0
+        };
+      });
+      var exposure = cells.reduce(function (sum, cell) { return sum + cell.exposure; }, 0);
+      var clicks = cells.reduce(function (sum, cell) { return sum + cell.clicks; }, 0);
+      return {
+        date: dateText,
+        weekday: weekday(dateText),
+        exposure: exposure,
+        clicks: clicks,
+        ctr: exposure ? clicks / exposure : 0,
+        partial: partialDays.has(dateText),
+        buckets: cells
+      };
     });
-  });
-  return h + '</tbody></table>';
-}
 
-// ---- 三条文案对比大弹窗（2026-10-08）：**未到门槛看记分卡、过门槛看胜出特写** ----
-// 结构（用户 2026-10-08 定）：标题/摘要在前、指标在下；保留走青、下走红；两条资源时自动两列。
-var MSTYLES = [["auto", "自动"], ["score", "① 记分卡"], ["hero", "② 胜出特写"]];
-function ctrOf(g){ return (g.e || 0) ? (g.c || 0) / g.e : 0; }   // 点击率（桶内比较用）
-function betterOf(g, h){                        // g 比 h 好吗？大卡排序：点击率 → 点击 → 曝光
-  if(!h) return true;
-  if(ctrOf(g) !== ctrOf(h)) return ctrOf(g) > ctrOf(h);
-  if((g.c || 0) !== (h.c || 0)) return (g.c || 0) > (h.c || 0);
-  return (g.e || 0) > (h.e || 0);
-}
-// ---- 「调整动作」是**什么时候**判的、依据哪次读数（2026-10-12 用户定）----
-// 起因：建批时写进 `复盘动作.yaml` 的记录当时挂在**新批**名下，看板把它当"这一批的结论"用，
-// 几天后数据反过来也不刷新（对照明明 15 击却被标「下」）。现在每条记录都带判定时间 + 当时读数：
-// 页面把"当时 vs 现在"摆出来，旧结论再也不会被当成现结论看。
-function atText(a){                             // （判定依据 2026-10-09 10:24 的读数）
-  if(!a) return '';
-  return a.at ? ' <span class="cmpat">（判定依据 ' + esc(a.at) + ' 的读数）</span>'
-              : ' <span class="cmpat">（判定时间未记录）</span>';
-}
-function rdText(readings){                      // 对照 1,340/1 ｜ 实验1 1,241/2
-  var ks = Object.keys(readings || {});
-  if(!ks.length) return "未记录";
-  return ks.map(function(k){
-    var v = readings[k] || [0, 0];
-    return esc(k) + ' ' + fmt(v[0]) + '/' + fmt(v[1]);
-  }).join(" ｜ ");
-}
-function driftText(a, gs){                      // '' = 没变化（或这条记录没写当时读数）
-  var ch = (a && a.changed) || [];
-  if(!ch.length) return '';
-  var now = {};
-  (gs || []).forEach(function(g){ now[g.label] = g; });
-  return '判定后数据又变了：' + ch.map(function(lb){
-    var was = (a.readings || {})[lb] || [0, 0], g = now[lb] || {e: 0, c: 0};
-    return esc(lb) + ' ' + fmt(was[0]) + '/' + fmt(was[1]) + ' → ' + fmt(g.e || 0) + '/' + fmt(g.c || 0);
-  }).join(" ｜ ") + '（这条是 ' + esc(a.at || "更早") + ' 判的，要看最新的数据就重新判定）';
-}
-function mctxOf(bk, j){
-  var gs = groupsBySlot(j.groups || []);
-  var th = (bk.threshold != null) ? bk.threshold : j.threshold;
-  var e = j.exposure || 0;
-  var maxE = 1, best = null;
-  gs.forEach(function(g){
-    maxE = Math.max(maxE, g.e || 0);
-    if(!best || (g.c || 0) > (best.c || 0)) best = g;
-  });
-  var keep = gs.filter(function(g){ return g.keep; });
-  // 大卡（胜出特写）= **保留名单里点击率最高的那条**（2026-10-09 用户定：大卡本来就该是"胜出"的，
-  // 不能再按槽位取第一条——之前永远是"对照组"占大卡，点击最多的反而排到最后一行）。
-  // 只在**保留**里挑：被"下"的那条放大卡，页面会自己打自己（大卡挂着红标"下"）。
-  var top = keep.reduce(function(acc, g){ return betterOf(g, acc) ? g : acc; }, null);
-  var ready = !!th && e >= th;
-  var a = j.action, actTxt;
-  if(a){                                        // 人定过 → 写「调整动作」+ 判定时间（**不写「建议」**）
-    actTxt = '<span class="badge hi">调整动作</span> <b class="actkeep">留 ' +
-      (slotNames(j.keep) || "—") + '</b> ｜ <span class="actdrop">下 ' +
-      (slotNames(j.drop) || "—") + '</span>' + atText(a);
-  } else if(!th) { actTxt = '建议：无门槛'; }
-  else if(ready) { actTxt = '建议：<b class="actkeep">留 ' + (slotNames(j.keep) || "—") +
-      '</b> ｜ <span class="actdrop">下 ' + (slotNames(j.drop) || "—") + '</span>'; }
-  else { actTxt = '建议：继续观察'; }
-  return {gs: gs, th: th, e: e, ready: ready, pass: !!j.pass, maxE: maxE, best: best, keep: keep,
-          hero: top || best || gs[0], bk: bk, j: j,
-          act: actTxt, drift: driftText(a, gs)};
-}
-function markOf(g, c){
-  if(!c.th) return '<span class="badge dim">—</span>';
-  if(!c.ready) return '<span class="badge dim">等到达门槛</span>';
-  return g.keep ? '<span class="badge keepflag">保留</span>' : '<span class="badge zero">下</span>';
-}
-function bestTag(g, c){ return (g === c.best && c.best.c > 0) ? '<span class="badge best">点击最高</span>' : ''; }
-function slotOf(g, c){ return SLOT_COLORS[(c.gs.indexOf(g) + SLOT_COLORS.length) % SLOT_COLORS.length]; }
-function titleOf(g){ return g.title ? hl(g.title, g.highlight) : esc(g.res || ""); }
-function sumOf(g){ return g.summary ? hl(g.summary, g.highlight) : ""; }
+    var statsByBatch = {};
+    (payload.batchStats || []).forEach(function (row) {
+      if (!statsByBatch[row.batch]) statsByBatch[row.batch] = [];
+      statsByBatch[row.batch].push(row);
+    });
+    var judgeByBatch = {};
+    Object.keys(payload.batchJudge || {}).forEach(function (batchId) {
+      judgeByBatch[batchId] = {};
+      (payload.batchJudge[batchId] || []).forEach(function (row) {
+        judgeByBatch[batchId][row.bucket] = row;
+      });
+    });
 
-function bodyScore(c){                          // ① 记分卡：标题/摘要在前，指标在后
-  function row(label, fn, cls){
-    return '<tr class="' + (cls || "") + '"><th class="rh">' + label + '</th>' + c.gs.map(fn).join("") + '</tr>';
-  }
-  return '<table class="scoretab"><thead><tr><th class="rh"></th>' + c.gs.map(function(g){
-      return '<th class="' + (g === c.best ? "win" : "") + '"><span class="slotdot" style="background:' +
-             slotOf(g, c) + '"></span>' + esc(g.label || "") + bestTag(g, c) + '</th>';
-    }).join("") + '</tr></thead><tbody>' +
-    row('标题', function(g){ return '<td>' + titleOf(g) + '</td>'; }, 'crowtitle') +
-    row('摘要', function(g){ return '<td>' + sumOf(g) + '</td>'; }, 'crowsum') +
-    row('曝光', function(g){
-      return '<td><span class="num">' + fmt(g.e || 0) + '</span><i class="scorebar"><em style="width:' +
-             ((g.e || 0) / c.maxE * 100).toFixed(1) + '%;background:' + slotOf(g, c) + '"></em></i></td>';
-    }) +
-    row('点击', function(g){ return '<td class="num">' + fmt(g.c || 0) + '</td>'; }) +
-    row('点击率', function(g){ return '<td class="num">' + pct(g.c || 0, g.e || 0) + '</td>'; }) +
-    row('判定', function(g){ return '<td>' + markOf(g, c) + '</td>'; }) +
-    '</tbody></table>';
-}
-function bodyHero(c){                           // ② 胜出特写：左大卡 + 右两条小卡
-  var hg = c.hero;
-  var others = c.gs.filter(function(g){ return g !== hg; });
-  return '<div class="hero">' +
-    '<article class="herocard" style="--slot:' + slotOf(hg, c) + '">' +
-      '<div class="cmpslot"><span class="slotdot" style="background:' + slotOf(hg, c) + '"></span>' +
-        '<b>' + esc(hg.label || "") + '</b>' + bestTag(hg, c) +
-        '<span class="badge keepflag">★ ' + (hg.keep ? '优先保留' : '点击最高') + '</span></div>' +
-      '<h4 class="herocopy">' + titleOf(hg) + '</h4>' +
-      '<p class="herosum">' + sumOf(hg) + '</p>' +
-      '<div class="herostats">' +
-        '<div><span>曝光</span><b class="num">' + fmt(hg.e || 0) + '</b></div>' +
-        '<div><span>点击</span><b class="num">' + fmt(hg.c || 0) + '</b></div>' +
-        '<div><span>点击率</span><b class="num">' + pct(hg.c || 0, hg.e || 0) + '</b></div>' +
-      '</div></article>' +
-    '<div class="runlist">' + others.map(function(g){
-      return '<article class="runitem">' +
-        '<div class="cmpslot"><span class="slotdot" style="background:' + slotOf(g, c) + '"></span>' +
-          '<b>' + esc(g.label || "") + '</b>' + bestTag(g, c) + markOf(g, c) + '</div>' +
-        '<div class="rcopy">' + titleOf(g) + '</div>' +
-        '<div class="rsum">' + sumOf(g) + '</div>' +
-        '<div class="runstats"><span>曝光 <b class="num">' + fmt(g.e || 0) + '</b></span>' +
-          '<span>点击 <b class="num">' + fmt(g.c || 0) + '</b></span>' +
-          '<span>点击率 <b class="num">' + pct(g.c || 0, g.e || 0) + '</b></span></div></article>';
-    }).join("") + '</div></div>';
-}
-function openCompare(bid, batchId){
-  var bk = bById(bid), j = null;
-  if(bk) (bk.batches || []).forEach(function(x){ if(x.batch === batchId) j = x; });
-  if(!j) return;
-  state.mctx = mctxOf(bk, j);
-  renderModal();
-  $("modal").hidden = false;
-}
-function renderModal(){
-  var c = state.mctx;
-  if(!c) return;
-  var bk = c.bk, j = c.j;
-  var style = (state.mstyle === "auto") ? (c.ready ? "hero" : "score") : state.mstyle;
-  var box = document.querySelector(".modalbox");
-  if(box) box.className = "modalbox cmp";
-  $("modal").dataset.style = style;
-  var st = !c.th ? '<span class="badge dim">—</span>'
-         : (!j.task ? '<span class="badge dim">待起投</span>'
-         : (c.pass ? '<span class="badge ok">达标</span>'
-         : (c.ready ? '<span class="badge warn">过门槛 · 未达标</span>' : '<span class="badge dim">未到门槛</span>')));
-  $("mtitle").innerHTML = '<span class="mkdot" style="background:' + bk.color + '">' + esc(dotText(bk)) + '</span>' +
-    esc(bucketLabel(bk)) +
-    '<span class="cmpchip">' + esc(j.label || "") + ' · ' + esc(j.start || "") + ' 起投</span>' + st +
-    '<span class="cmpstyles">' + MSTYLES.map(function(m){
-      return '<button data-mstyle="' + m[0] + '"' + (state.mstyle === m[0] ? ' class="on"' : '') + '>' + m[1] + '</button>';
-    }).join("") + '</span>';
-  $("mbody").innerHTML =
-    '<div class="cmpmeta"><div class="cmpprog"><b class="num">' + fmt(c.e) + '</b><span>／ 门槛 ' +
-      (c.th ? fmt(c.th) : "—") + '</span><span class="barwrap"><span class="bar" style="width:' +
-      (c.th ? Math.min(100, c.e / c.th * 100).toFixed(1) : 0) + '%;background:' + bk.color +
-      '"></span></span></div><div class="cmpadv">' + c.act + '</div></div>' +
-    (c.drift ? '<div class="cmpdrift">⚠ ' + c.drift + '</div>' : '') +
-    '<div class="cmprule"></div>' +
-    (style === "hero" ? bodyHero(c) : bodyScore(c));
-}
+    var batches = (payload.batches || []).map(function (batch) {
+      var stats = statsByBatch[batch.id] || [];
+      if (!stats.length) return null;
+      var exposure = stats.reduce(function (sum, row) { return sum + Number(row.e || 0); }, 0);
+      var clicks = stats.reduce(function (sum, row) { return sum + Number(row.c || 0); }, 0);
+      var activeDays = Math.max.apply(null, stats.map(function (row) {
+        return Number(row.activeDays != null ? row.activeDays : (row.days || 0));
+      }));
+      var runDays = Math.max.apply(null, stats.map(function (row) {
+        return Number(row.runDays != null ? row.runDays : (row.days || 0));
+      }));
+      var lasts = stats.map(function (row) { return row.runLast || row.last; }).filter(Boolean);
+      var last = lasts.length ? lasts.sort().slice(-1)[0] : null;
+      return {
+        id: batch.id,
+        label: batch.label || batch.id,
+        start: batch.start || (stats[0] && stats[0].start) || "",
+        end: last,
+        days: runDays,
+        activeDays: activeDays,
+        exposure: exposure,
+        clicks: clicks,
+        ctr: exposure ? clicks / exposure : 0,
+        partial: !!(days.length && last === days[days.length - 1]),
+        buckets: stats.map(function (row) {
+          var rowExposure = Number(row.e || 0);
+          var rowClicks = Number(row.c || 0);
+          var judged = (judgeByBatch[batch.id] || {})[row.bucket] || null;
+          return {
+            id: row.bucket,
+            exposure: rowExposure,
+            clicks: rowClicks,
+            ctr: rowExposure ? rowClicks / rowExposure : 0,
+            judgeExposure: judged ? Number(judged.exposure || 0) : null,
+            judgeClicks: judged ? Number(judged.click || 0) : null,
+            days: Number(row.runDays != null ? row.runDays : (row.days || 0)),
+            activeDays: Number(row.activeDays != null ? row.activeDays : (row.days || 0)),
+            first: row.runFirst || row.first,
+            last: row.runLast || row.last
+          };
+        })
+      };
+    }).filter(Boolean);
 
-function ideaBtn(batch, bid){                 // 「调整思路」小图标（灯）：点了开弹窗
-  return '<button class="idea" data-idea="' + esc(batch) + "|" + esc(bid) + '" title="看调整思路" ' +
-         'aria-label="看调整思路"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">' +
-         '<path d="M8 1.7a4.1 4.1 0 0 0-2.4 7.4c.4.3.6.7.6 1.2v.3h3.6v-.3c0-.5.2-.9.6-1.2A4.1 4.1 0 0 0 8 1.7Z" ' +
-         'fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>' +
-         '<path d="M6.6 12.6h2.8M7.2 14.2h1.6" fill="none" stroke="currentColor" ' +
-         'stroke-width="1.3" stroke-linecap="round"/></svg></button>';
-}
-function openIdea(key){                        // 弹窗：这次为什么这么调（说明 = 复盘动作.yaml 的 note）
-  var p = String(key).split("|"), batch = p[0], bid = p[1];
-  var j = ((DATA.batchJudge || {})[batch] || []).filter(function(r){ return r.bucket === bid; })[0];
-  if(!j || !j.action) return;
-  var bl = batchById(batch);
-  var box = document.querySelector(".modalbox");
-  if(box) box.className = "modalbox";         // 回到窄的（待复盘/对比那两个弹窗各有自己的类）
-  $("mtitle").textContent = (topicOf(j) || ("桶 " + bid)) + " · 调整思路";
-  $("mbody").innerHTML =
-    '<div class="mline"><span class="k">批次</span><span>' + esc(bl ? bl.label : batch) + "</span></div>" +
-    '<div class="mline"><span class="k">判定依据</span><span>' +
-      (j.action.at ? esc(j.action.at) + " 的读数" : "未记录") + "</span></div>" +
-    '<div class="mline"><span class="k">当时读数</span><span>' + rdText(j.action.readings) + "</span></div>" +
-    '<div class="mline"><span class="k">本次调整</span><span>留 ' +
-      ((j.action.keep || []).join("、") || "—") + " ｜ 下 " +
-      ((j.action.drop || []).join("、") || "—") + "</span></div>" +
-    '<div class="mline"><span class="k">调整思路</span><span>' + esc(j.action.note) + "</span></div>" +
-    (driftText(j.action, j.groups) ?
-      '<div class="mline"><span class="k">⚠ 数据已变</span><span class="warn">' +
-      driftText(j.action, j.groups) + "</span></div>" : "");
-  $("modal").hidden = false;
-}
-function closeIdea(){ if($("modal")) $("modal").hidden = true; }
+    return {
+      id: payload.activityId || AID || "",
+      label: payload.label || "投放看板",
+      first: days[0] || "",
+      last: days.length ? days[days.length - 1] : "",
+      days: daily,
+      buckets: buckets.map(function (bucket) {
+        return {
+          id: bucket.id,
+          name: bucket.name,
+          color: bucket.color,
+          topic: bucket.topic || "",
+          threshold: Number(bucket.threshold || 1),
+          currentBatch: bucket.currentBatch || null,
+          refBatch: bucket.refBatch || null,
+          thresholdReading: bucket.thresholdReading || null
+        };
+      }),
+      batches: batches
+    };
+  }
 
-// ---- 待复盘（2026-09-30）：跨活动的「到门槛 · 没复盘 · 还在投」清单 ----
-// 口径在服务端（`perf_payload.todo_rows()`，与 /api/perf 同一套判定），页面只负责画 + 跳转：
-// 页面一次只有一个活动的数据，所以这份清单必须问服务端的 `/api/todo`。
-function loadTodo(){
-  if(window.__DATA__ || !AID) return;         // 单文件版没有服务；活动没定下来先不问
-  fetch("api/todo", { cache:"no-store" }).then(function(r){
-    if(!r.ok) throw new Error("HTTP " + r.status);
-    return r.json();
-  }).then(function(j){
-    TODO = j || {count: 0, items: []};
-    var btn = $("todobtn"), n = $("todocount");
-    if(!btn) return;
-    btn.hidden = !TODO.count;                 // 一条都没有 → 整个按钮不出现（不占地方）
-    if(n) n.textContent = TODO.count > 99 ? "99+" : (TODO.count || "");   // 角标最多三位，别把按钮撑大
-    btn.title = TODO.count ? ("待复盘 " + TODO.count + " 条（到门槛 · 还没复盘）") : "待复盘";
-  }).catch(function(){});
-}
-function openTodo(){
-  if(!TODO || !TODO.count) return;
-  $("mtitle").textContent = "待复盘";
-  var h = '<table class="todotb"><thead><tr><th>活动</th><th>批次</th><th>桶 / 人群</th>' +
-          '<th class="c">曝光 / 门槛</th><th class="n">点击</th><th class="n">点击率</th><th>判定</th>' +
-          '</tr></thead><tbody>';
-  h += TODO.items.map(function(it, i){
-    var p = Math.min(100, it.threshold ? it.exposure / it.threshold * 100 : 0);
-    return '<tr data-goto="' + i + '" class="gorow"><td>' + esc(it.activity) + '</td>' +
-      '<td>' + esc(it.batchLabel || it.batch) + '</td>' +
-      '<td><b>' + esc(it.bucket) + '</b> <span class="hint">' + esc(topicOf(it)) + '</span></td>' +
-      '<td class="c"><span class="barwrap" style="width:70px"><span class="bar" ' +
-        'style="width:' + p.toFixed(1) + '%;background:var(--accent)"></span></span> ' +
-        '<span class="num">' + fmt(it.exposure) + ' / ' + fmt(it.threshold) + '</span></td>' +
-      '<td class="n num">' + fmt(it.click) + '</td>' +
-      '<td class="n num">' + pct(it.click, it.exposure) + '</td>' +
-      '<td>' + (it.pass ? '<span class="badge ok">达标</span>'
-                        : '<span class="badge warn">过门槛 · 未达标</span>') + '</td></tr>';
-  }).join("");
-  $("mbody").innerHTML = h + '</tbody></table>';
-  var box = document.querySelector(".modalbox");
-  if(box) box.className = "modalbox wide";    // 列多，这个弹窗宽一点（调整思路那个还是窄的）
-  $("modal").hidden = false;
-}
-function gotoItem(i){
-  var it = (TODO && TODO.items || [])[i];
-  if(!it) return;
-  closeIdea();
-  if(it.activityId && it.activityId !== AID && actsHas(it.activityId)){
-    switchActivity(it.activityId);                     // 跨活动：换活动（2026-10-08 起不再"落批"）
-    if(state && it.bucket) state.bs = it.bucket;
-  } else if(state && it.bucket){
-    state.bs = it.bucket;                              // 同活动：把「批次之间」切到这个桶
-    renderAll();
+  function validDate(value, fallback) {
+    return value && value >= FIRST && value <= LAST ? value : fallback;
   }
-}
-function renderAll(){ renderHead(); renderBuckets(); renderBatchStats(); }
-document.addEventListener("click", function(ev){
-  var t = ev.target.closest ? ev.target.closest("button,[data-cmp],[data-bs],[data-bexp],[data-goto]") : null;
-  if(!t) return;
-  if(t.dataset.mstyle){ state.mstyle = t.dataset.mstyle; renderModal(); }  // 弹窗里切风格
-  else if(t.dataset.idea){ openIdea(t.dataset.idea); }     // 小图标：只开弹窗，不展开行（closest 先命中它）
-  else if(t.dataset.goto){ gotoItem(+t.dataset.goto); }     // 待复盘清单：跳到那一批
-  else if(t.dataset.mode){ state.mode = t.dataset.mode; renderBatchStats(); }
-  else if(t.dataset.bs){ state.bs = t.dataset.bs; state.exp = {}; renderBatchStats(); }
-  else if(t.dataset.cmp){                                   // 点桶行 / 点某批文案行 → 三条对比大弹窗
-    var cp = t.dataset.cmp.split("|");
-    openCompare(cp[0], cp[1]);
+
+  function initialState(keep) {
+    var sevenStart = DAYS[Math.max(0, DAYS.length - 7)];
+    var defaultStart = sevenStart ? sevenStart.date : FIRST;
+    var saved = keep || {};
+    var view = saved.view === "batch" ? "batch" : "date";
+    var bucket = saved.bucket;
+    if (bucket !== "all" && !BUCKETS.some(function (item) { return item.id === bucket; })) bucket = null;
+    if (!bucket) bucket = view === "batch" && BUCKETS.length ? BUCKETS[0].id : "all";
+    if (view === "batch" && bucket === "all" && BUCKETS.length) bucket = BUCKETS[0].id;
+    return {
+      view: view,
+      size: saved.size === 0 || saved.size === 1 || saved.size === 7 ? saved.size : 7,
+      start: validDate(saved.start, defaultStart),
+      end: validDate(saved.end, LAST),
+      bucket: bucket,
+      metric: ["exposure", "clicks", "ctr"].indexOf(saved.metric) >= 0 ? saved.metric : "clicks",
+      analysisMode: saved.analysisMode === "chart" ? "chart" : "detail",
+      dateChart: DATE_CHARTS.some(function (item) { return item[0] === saved.dateChart; })
+        ? saved.dateChart : "trend",
+      batchChart: BATCH_CHARTS.some(function (item) { return item[0] === saved.batchChart; })
+        ? saved.batchChart : "trend",
+      expandedDates: Array.isArray(saved.expandedDates)
+        ? saved.expandedDates.filter(function (date) {
+          return DAYS.some(function (day) { return day.date === date; });
+        })
+        : []
+    };
   }
-  else if(t.dataset.bexp){                       // 批次之间：点一行展开这一批的三条文案（可多开）
-    state.exp[t.dataset.bexp] = !state.exp[t.dataset.bexp];
-    renderBatchStats();
+
+  function boot(payload, keep) {
+    DATA = adaptPayload(payload);
+    DAYS = DATA.days || [];
+    BUCKETS = DATA.buckets || [];
+    BATCHES = DATA.batches || [];
+    FIRST = DATA.first || "";
+    LAST = DATA.last || "";
+    if (!ACTIVITIES.length) ACTIVITIES = [{ id: DATA.id, label: DATA.label }];
+    ACTIVE_ACTIVITY = ACTIVITIES.find(function (item) { return item.id === DATA.id; }) ||
+      { id: DATA.id, label: DATA.label };
+    AID = DATA.id || AID;
+    state = initialState(keep);
+    state.activity = AID;
+    renderAll(false);
   }
-});
-// ---- 多活动（2026-09-28）：下拉切换器；每个活动的取数状态、流水、配额各一份 ----
-function actQuery(extra){                      // ?activity=…（单文件版没有 AID 就返回空）
-  var qs = [];
-  if(AID) qs.push("activity=" + encodeURIComponent(AID));
-  if(extra) qs.push(extra);
-  return qs.length ? ("?" + qs.join("&")) : "";
-}
-function esc(s){
-  return String(s).replace(/[&<>"]/g, function(c){
-    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];
-  });
-}
-function actsHas(id){
-  for(var i=0;i<ACTS.length;i++){ if(ACTS[i].id === id) return true; }
-  return false;
-}
-function clearPanels(){                        // 切活动 / 加载失败：先把上一个活动的数字清掉
-  ["buckets","ctlmode","ctlbs","batchstats"].forEach(function(k){
-    var el = $(k); if(el) el.innerHTML = "";
-  });
-}
-function bootActivities(res){
-  ACTS = (res && res.activities) || [];
-  var saved = null;
-  try { saved = localStorage.getItem(LS_KEY); } catch(e){}
-  AID = (saved && actsHas(saved)) ? saved : ((res && res.default) || (ACTS.length ? ACTS[0].id : null));
-  var sel = $("actsel");
-  if(sel){
-    sel.innerHTML = ACTS.map(function(a){
-      return '<option value="'+esc(a.id)+'">'+esc(a.label)+
-             (a.ended ? "（已收尾）" : ((a.db && a.db.days) ? "" : "（库里还没有数据）"))+'</option>';
-    }).join("");
-    sel.value = AID || "";
-    sel.hidden = !ACTS.length;
-    sel.onchange = function(){ switchActivity(this.value); };
+
+  function filteredDays() {
+    return DAYS.filter(function (day) {
+      return day.date >= state.start && day.date <= state.end;
+    });
   }
-  if($("ttl")) $("ttl").hidden = !!ACTS.length;   // 有下拉时下拉就是标题，同一个名字不写两遍
-}
-function loadActivities(){
-  fetch("api/activities", { cache:"no-store" }).then(function(r){
-    if(!r.ok) throw new Error("HTTP " + r.status);
-    return r.json();
-  }).then(function(res){
-    bootActivities(res);
-    loadFromServer();
-    loadFetchState();
-    loadTodo();                     // 待复盘角标：跨所有活动，得等 AID 定下来才问
-  }).catch(function(e){
-    $("subline").textContent = "拿不到活动清单（" + e.message +
-      "）：确认本地服务在跑——web/app.py 或双击 web/start.bat。";
-  });
-}
-function switchActivity(id, keep){             // keep：切过去之后落到哪一批（待复盘清单点行用）
-  if(!id || id === AID) return;
-  AID = id;
-  try { localStorage.setItem(LS_KEY, id); } catch(e){}
-  if($("actsel")) $("actsel").value = id;      // 待复盘点行是程序化切活动：下拉得跟着走
-  state = null;                                // 切活动不保界面状态：两个活动的桶和日期区间都不一样
-  clearPanels();
-  loadFromServer(keep);
-  loadFetchState();
-  loadTodo();
-}
-function loadFromServer(keep){
-  if(window.__DATA__){ boot(window.__DATA__, keep); return; }   // 单文件版：数据就在文件里
-  fetch("api/perf" + actQuery(), { cache:"no-store" }).then(function(r){
-    if(!r.ok){
-      return r.json().catch(function(){ return {}; }).then(function(j){
-        throw new Error(j.error || ("HTTP " + r.status));
+
+  function bucketDef(id) {
+    return BUCKETS.find(function (bucket) { return bucket.id === id; }) || null;
+  }
+
+  function selectedBucket() {
+    return state.bucket === "all" ? null : bucketDef(state.bucket);
+  }
+
+  function bucketShortName(bucket) {
+    var name = (bucket && bucket.name) || "—";
+    var prefix = ((ACTIVE_ACTIVITY && ACTIVE_ACTIVITY.id) || "") + "-";
+    return prefix && name.indexOf(prefix) === 0 ? name.slice(prefix.length) : name;
+  }
+
+  function batchLabel(batch) {
+    return batch.label === "首批" ? "初始批" : batch.label;
+  }
+
+  function batchMetrics(batch) {
+    var bucket = selectedBucket();
+    if (!bucket) return batch;
+    var cell = batch.buckets.find(function (item) { return item.id === bucket.id; }) ||
+      { exposure: 0, clicks: 0, ctr: 0, days: 0 };
+    var days = Number(cell.days || batch.days || 0);
+    return {
+      exposure: Number(cell.exposure || 0),
+      clicks: Number(cell.clicks || 0),
+      ctr: Number(cell.ctr || 0),
+      days: days,
+      first: cell.first || batch.start,
+      last: cell.last || batch.end,
+      avgExposure: Number(cell.exposure || 0) / Math.max(days, 1),
+      avgClicks: Number(cell.clicks || 0) / Math.max(days, 1)
+    };
+  }
+
+  function selectedBatches() {
+    var bucket = selectedBucket();
+    if (!bucket) return [];
+    return BATCHES.filter(function (batch) {
+      var cell = batch.buckets.find(function (item) { return item.id === bucket.id; });
+      return cell && (cell.exposure > 0 || cell.clicks > 0);
+    }).sort(function (a, b) {
+      return (batchMetrics(a).first || a.start || "").localeCompare(batchMetrics(b).first || b.start || "");
+    });
+  }
+
+  function bucketBatchLabel(batch) {
+    var ordinal = selectedBatches().findIndex(function (item) { return item.id === batch.id; }) + 1;
+    return batch.label === "首批" ? "第 " + ordinal + " 批 · 初始" : "第 " + ordinal + " 批";
+  }
+
+  function dayMetrics(day) {
+    var bucket = selectedBucket();
+    if (!bucket) return day;
+    var cell = day.buckets.find(function (item) { return item.id === bucket.id; }) ||
+      { exposure: 0, clicks: 0, ctr: 0 };
+    return {
+      exposure: Number(cell.exposure || 0),
+      clicks: Number(cell.clicks || 0),
+      ctr: Number(cell.ctr || 0)
+    };
+  }
+
+  function bucketStartDate(bucketId) {
+    var row = DAYS.find(function (day) {
+      var cell = day.buckets.find(function (item) { return item.id === bucketId; });
+      return cell && (cell.exposure > 0 || cell.clicks > 0);
+    });
+    return row ? row.date : null;
+  }
+
+  function isBucketStarted(day, bucketId) {
+    var start = bucketStartDate(bucketId);
+    return !start || day.date >= start;
+  }
+
+  function previousDateRows() {
+    var rows = filteredDays();
+    var start = DAYS.findIndex(function (day) { return day.date === state.start; });
+    return DAYS.slice(Math.max(0, start - rows.length), start);
+  }
+
+  function rankedBuckets() {
+    var rows = selectedBucket() ? [selectedBucket()] : BUCKETS;
+    return rows.map(function (def) {
+      var clicks = filteredDays().reduce(function (sum, day) {
+        var cell = day.buckets.find(function (item) { return item.id === def.id; });
+        return sum + (cell ? cell.clicks : 0);
+      }, 0);
+      return { def: def, clicks: clicks };
+    }).sort(function (a, b) { return b.clicks - a.clicks; });
+  }
+
+  function topBucketDefs(limit) {
+    return rankedBuckets().slice(0, limit || 5).map(function (item) { return item.def; });
+  }
+
+  function stackedBucketDefs() {
+    if (selectedBucket()) return [selectedBucket()];
+    if (BUCKETS.length <= 6) return BUCKETS.slice();
+    return topBucketDefs(5).concat(OTHER);
+  }
+
+  function valueOfCell(cell, metric) {
+    if (metric === "exposure") return Number(cell.exposure || 0);
+    if (metric === "ctr") return Number(cell.ctr || 0) * 100;
+    return Number(cell.clicks || 0);
+  }
+
+  function metricValue(metrics) {
+    if (state.metric === "exposure") return Number(metrics.exposure || 0);
+    if (state.metric === "ctr") return Number(metrics.ctr || 0) * 100;
+    return Number(metrics.clicks || 0);
+  }
+
+  function chartDayValue(day) {
+    return metricValue(dayMetrics(day));
+  }
+
+  function metricName() {
+    if (state.metric === "exposure") return "曝光";
+    if (state.metric === "ctr") return "点击率";
+    return "点击";
+  }
+
+  function valueText(value) {
+    if (state.metric === "ctr") return Number(value || 0).toFixed(2) + "%";
+    if (value >= 10000) return (value / 10000).toFixed(1) + "万";
+    if (value >= 1000) return (value / 1000).toFixed(1) + "k";
+    return Number(value || 0).toFixed(value % 1 ? 1 : 0);
+  }
+
+  function sumRows(rows) {
+    var exposure = rows.reduce(function (sum, day) { return sum + dayMetrics(day).exposure; }, 0);
+    var clicks = rows.reduce(function (sum, day) { return sum + dayMetrics(day).clicks; }, 0);
+    return { exposure: exposure, clicks: clicks, ctr: exposure ? clicks / exposure : 0 };
+  }
+
+  function bucketSelectMarkup(includeAll) {
+    var current = state.bucket === "all" ? "全部" : bucketShortName(bucketDef(state.bucket));
+    var options = (includeAll ? [{ value: "all", label: "全部" }] : []).concat(
+      BUCKETS.map(function (bucket) {
+        return { value: bucket.id, label: bucketShortName(bucket) };
+      })
+    );
+    return '<label class="bucketpick">' + (includeAll ? "分桶 / 产品" : "选择分桶 / 产品") +
+      '<span class="customselect"><button type="button" class="selectbtn" data-buckettoggle data-value="' +
+      esc(state.bucket || "") + '" aria-haspopup="listbox" aria-expanded="false"><span>' +
+      esc(current) + '</span><i class="selectarrow" aria-hidden="true"></i></button>' +
+      '<span class="selectmenu" role="listbox" aria-label="选择分桶或产品" hidden>' +
+      options.map(function (option) {
+        return '<button type="button" class="selectoption" data-bucketvalue="' + esc(option.value) +
+          '" role="option" aria-selected="' + (option.value === state.bucket ? "true" : "false") +
+          '">' + esc(option.label) + '</button>';
+      }).join("") + '</span></span></label>';
+  }
+
+  function dateFilterMarkup() {
+    var ranges = [[1, "今天"], [7, "近 7 天"], [0, "全部"]];
+    return '<div class="modebar"><div class="seg">' + ranges.map(function (range) {
+      return '<button data-size="' + range[0] + '" class="' +
+        (state.size === range[0] ? "on" : "") + '">' + range[1] + '</button>';
+    }).join("") + '</div><div class="dates"><span>日期</span><div class="daterangepicker">' +
+      '<button type="button" class="daterangetoggle" data-datetoggle aria-haspopup="dialog" ' +
+      'aria-expanded="false" aria-label="选择日期范围"><span class="datevalue">' +
+      dateText(state.start) + '</span><span class="datesep">至</span><span class="datevalue">' +
+      dateText(state.end) + '</span><svg class="dateicon" viewBox="0 0 16 16" aria-hidden="true">' +
+      '<rect x="2.2" y="3.2" width="11.6" height="10.2" rx="1.8" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.3"/><path d="M2.4 6.3h11.2M5.2 1.9v2.8M10.8 1.9v2.8" fill="none" ' +
+      'stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>' +
+      '<div class="datepicker" id="datepickerpanel" role="dialog" aria-label="选择日期范围" hidden></div>' +
+      '</div></div>' + bucketSelectMarkup(true) +
+      '<span class="metatext">' + filteredDays().length +
+      ' 天 · 最新一天为未完整日</span></div>';
+  }
+
+  function datePickerMarkup() {
+    if (!DATE_PICKER) return "";
+    var parts = DATE_PICKER.month.split("-");
+    var year = Number(parts[0]);
+    var monthIndex = Number(parts[1]) - 1;
+    var first = new Date(year, monthIndex, 1);
+    var gridStart = new Date(year, monthIndex, 1 - ((first.getDay() + 6) % 7));
+    var today = dateKey(new Date());
+    var cells = [];
+    for (var index = 0; index < 42; index++) {
+      var date = new Date(gridStart);
+      date.setDate(gridStart.getDate() + index);
+      var key = dateKey(date);
+      var classes = ["calday"];
+      if (key.slice(0, 7) !== DATE_PICKER.month) classes.push("outside");
+      if (key === today) classes.push("today");
+      if (key > DATE_PICKER.start && key < DATE_PICKER.end) classes.push("in-range");
+      if (key === DATE_PICKER.start) classes.push("range-start");
+      if (key === DATE_PICKER.end) classes.push("range-end");
+      if (DATE_PICKER.start === DATE_PICKER.end && key === DATE_PICKER.start) {
+        classes.push("range-single");
+      }
+      var disabled = key < FIRST || key > LAST;
+      cells.push('<button type="button" class="' + classes.join(" ") + '" data-calday="' + key +
+        '" aria-label="' + dateText(key) + '" aria-pressed="' +
+        (key >= DATE_PICKER.start && key <= DATE_PICKER.end ? "true" : "false") + '"' +
+        (disabled ? " disabled" : "") + '>' + date.getDate() + '</button>');
+    }
+    var firstMonth = monthKey(FIRST);
+    var lastMonth = monthKey(LAST);
+    var canPrev = DATE_PICKER.month > firstMonth;
+    var canNext = DATE_PICKER.month < lastMonth;
+    var hint = DATE_PICKER.stage === "end"
+      ? "开始日 " + dateText(DATE_PICKER.start) + " · 请选择结束日"
+      : "已选 " + dateText(DATE_PICKER.start) + " 至 " + dateText(DATE_PICKER.end);
+    return '<div class="datepickerhead"><button type="button" class="calnav" data-calnav="-1" ' +
+      'aria-label="上个月"' + (canPrev ? "" : " disabled") + '>‹</button><b>' +
+      monthText(DATE_PICKER.month) + '</b><button type="button" class="calnav" data-calnav="1" ' +
+      'aria-label="下个月"' + (canNext ? "" : " disabled") + '>›</button></div>' +
+      '<div class="calweek"><span>一</span><span>二</span><span>三</span><span>四</span>' +
+      '<span>五</span><span>六</span><span>日</span></div><div class="calgrid">' +
+      cells.join("") + '</div><div class="calhint">' + hint + '</div>' +
+      '<div class="datepickeractions"><button type="button" class="caltextbtn" data-calaction="cancel">取消</button>' +
+      '<button type="button" class="caltextbtn" data-calaction="today">今天</button>' +
+      '<button type="button" class="calapplybtn" data-calaction="apply">应用</button></div>';
+  }
+
+  function renderDatePicker() {
+    var panel = $("datepickerpanel");
+    if (panel && DATE_PICKER) panel.innerHTML = datePickerMarkup();
+  }
+
+  function openDatePicker() {
+    DATE_PICKER = {
+      start: state.start,
+      end: state.end,
+      month: monthKey(state.end || state.start),
+      stage: null
+    };
+    var range = document.querySelector(".daterangepicker");
+    var toggle = document.querySelector("[data-datetoggle]");
+    var panel = $("datepickerpanel");
+    renderDatePicker();
+    if (range) range.classList.add("open");
+    if (toggle) toggle.setAttribute("aria-expanded", "true");
+    if (panel) panel.hidden = false;
+    requestAnimationFrame(function () {
+      var selected = panel && panel.querySelector(".range-end:not(:disabled)");
+      if (selected) selected.focus({ preventScroll: true });
+    });
+  }
+
+  function closeDatePicker(focusToggle) {
+    DATE_PICKER = null;
+    var range = document.querySelector(".daterangepicker");
+    var toggle = document.querySelector("[data-datetoggle]");
+    var panel = $("datepickerpanel");
+    if (range) range.classList.remove("open");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+    if (panel) {
+      panel.hidden = true;
+      panel.innerHTML = "";
+    }
+    if (focusToggle && toggle) toggle.focus({ preventScroll: true });
+  }
+
+  function batchFilterMarkup() {
+    return '<div class="modebar">' + bucketSelectMarkup(false) +
+      '<span class="metatext">已选 ' + esc(bucketShortName(selectedBucket())) + ' · 共 ' +
+      selectedBatches().length + ' 批 · 按起投日排序</span></div>';
+  }
+
+  function summaryMarkup() {
+    if (state.view === "date") {
+      var rows = filteredDays();
+      var total = sumRows(rows);
+      return '<div class="summarygrid"><div><span>区间曝光</span><b class="num">' +
+        fmt(total.exposure) + '</b></div><div><span>区间点击</span><b class="num">' +
+        fmt(total.clicks) + '</b></div><div><span>区间点击率</span><b class="num">' +
+        pct(total.ctr) + '</b></div><div><span>完整日</span><b class="num">' +
+        rows.filter(function (day) { return !day.partial; }).length + '</b></div></div>';
+    }
+    var batches = selectedBatches();
+    if (!batches.length) return '<div class="empty">当前分桶没有可展示的批次数据</div>';
+    var exposure = batches.reduce(function (sum, batch) {
+      return sum + batchMetrics(batch).exposure;
+    }, 0);
+    var clicks = batches.reduce(function (sum, batch) {
+      return sum + batchMetrics(batch).clicks;
+    }, 0);
+    return '<div class="summarygrid"><div><span>批次数量</span><b class="num">' +
+      batches.length + '</b></div><div><span>累计曝光</span><b class="num">' + fmt(exposure) +
+      '</b></div><div><span>累计点击</span><b class="num">' + fmt(clicks) +
+      '</b></div><div><span>累计点击率</span><b class="num">' +
+      pct(exposure ? clicks / exposure : 0) + '</b></div></div>';
+  }
+
+  function bucketThresholdItem(def) {
+    var reading = def.thresholdReading || null;
+    var batch = reading && reading.batch ? {
+      id: reading.batch,
+      label: reading.label || reading.batch
+    } : null;
+    var exposure = reading ? Number(reading.exposure || 0) : 0;
+    var threshold = Number(def.threshold || 0);
+    var reached = threshold > 0 && exposure >= threshold;
+    var progress = threshold > 0 ? Math.min(100, exposure / threshold * 100) : 0;
+    return {
+      def: def,
+      batch: batch,
+      exposure: exposure,
+      threshold: threshold,
+      reached: reached,
+      progress: progress
+    };
+  }
+
+  function thresholdRows() {
+    return BUCKETS.map(bucketThresholdItem);
+  }
+
+  function updateThresholdButton() {
+    var button = $("thresholdbtn");
+    var count = $("thresholdbtncount");
+    if (!button || !count) return;
+    var rows = thresholdRows();
+    var reached = rows.filter(function (row) { return row.reached; }).length;
+    button.hidden = !rows.length;
+    count.textContent = reached + " / " + rows.length;
+    button.classList.toggle("has-reached", reached > 0);
+    button.setAttribute("aria-label", "查看当前批门槛，已达 " + reached + " 个，共 " + rows.length + " 个");
+    button.title = rows.length
+      ? "当前批门槛：已达 " + reached + " / " + rows.length + "，点击查看"
+      : "当前批门槛";
+  }
+
+  function thresholdOverviewMarkup() {
+    if (!BUCKETS.length) return "";
+    var rows = thresholdRows();
+    var reached = rows.filter(function (row) { return row.reached; }).length;
+    return '<div class="thresholdmodalbody"><div class="thresholdmodalintro">' +
+      '<span class="thresholdcount">已达 ' + reached + ' / ' + rows.length + '</span>' +
+      '<span class="hint">按每桶当前批累计曝光；无当前批读数时使用参考批 · 点击任一桶可筛选</span>' +
+      '</div><div class="thresholdgrid">' + rows.map(function (row) {
+        var name = bucketShortName(row.def);
+        var state = row.reached ? "已达门槛" : (row.batch ? "未到门槛" : "尚无批次数据");
+        var title = name + " · " + state + " · 曝光 " + fmt(row.exposure) +
+          (row.threshold ? " / " + fmt(row.threshold) : "") +
+          (row.batch ? " · " + row.batch.label : "");
+        return '<button type="button" class="thresholditem ' + (row.reached ? "reached" : "unreached") +
+          '" data-thresholdbucket="' + esc(row.def.id) + '" title="' + esc(title) +
+          '" aria-label="' + esc(title + "，点击筛选") + '">' +
+          '<span class="thresholditemhead"><span class="thresholdname"><i class="slotdot" style="background:' +
+          row.def.color + '"></i>' + esc(name) + '</span><span class="thresholdstate">' + state +
+          '</span></span><span class="thresholdbar"><i style="width:' + row.progress.toFixed(1) +
+          '%;background:' + (row.reached ? "var(--ok)" : row.def.color) + '"></i></span>' +
+          '<span class="thresholdnumbers"><span>' + fmt(row.exposure) + '</span><span>' +
+          (row.threshold ? " / " + fmt(row.threshold) : " / —") + '</span></span></button>';
+      }).join("") + '</div></div>';
+  }
+
+  function activeChart() {
+    return state.view === "date" ? state.dateChart : state.batchChart;
+  }
+
+  function supportsMetric() {
+    return ["composition", "bullet"].indexOf(activeChart()) < 0;
+  }
+
+  function chartToolbar() {
+    var charts = state.view === "date" ? DATE_CHARTS : BATCH_CHARTS;
+    var disabled = !supportsMetric();
+    return '<div class="charttoolbar"><div class="charttypes">' + charts.map(function (chart) {
+      return '<button class="fbtn ' + (activeChart() === chart[0] ? "on" : "") +
+        '" data-' + state.view + 'chart="' + chart[0] + '">' + chart[1] + '</button>';
+    }).join("") + '</div><div class="seg" title="' +
+      (disabled ? "当前图表使用固定指标" : "切换图表指标") + '">' +
+      ["exposure", "clicks", "ctr"].map(function (metric) {
+        var label = { exposure: "曝光", clicks: "点击", ctr: "点击率" }[metric];
+        return '<button data-metric="' + metric + '" class="' +
+          (state.metric === metric ? "on" : "") + '"' + (disabled ? " disabled" : "") + '>' +
+          label + '</button>';
+      }).join("") + '</div><span class="meta">' + (state.view === "date"
+        ? filteredDays().length + " 天 · 按日口径"
+        : esc(bucketShortName(selectedBucket())) + " · " + selectedBatches().length + " 批") +
+      '</span></div>';
+  }
+
+  function chartIntro() {
+    var intro = {
+      trend: ["双周期趋势", "原始日数据 + 7 日均线；棕色标记按起投日汇总，点击可看批次清单。"],
+      composition: ["点击构成", "点击最多的前 5 个桶单独展示，其余合并为“其他桶”，避免颜色过多。"],
+      heatmap: ["异常热力", "颜色表示" + metricName() + "强弱，点击单元格可定位具体日期和桶。"],
+      small: ["分桶小倍图", "最多展示点击前 5 个桶；每个桶单独一张趋势，不和其他桶共用纵轴。"],
+      bars: ["批次对比", "所选桶的每个批次一行，按同一指标横向比较。"],
+      bullet: ["门槛完成度", "所选桶各批次的累计曝光与同一门槛对比。"]
+    }[activeChart()];
+    if (state.view === "batch" && activeChart() === "trend") {
+      intro = ["批次趋势", bucketShortName(selectedBucket()) + "按起投时间展示全部 " +
+        selectedBatches().length + " 个批次的" + metricName() + "。"];
+    } else if (state.view === "batch" && activeChart() === "bars") {
+      intro = ["批次对比", bucketShortName(selectedBucket()) + "的全部批次按" + metricName() + "横向排列。"];
+    } else if (state.view === "batch" && activeChart() === "bullet") {
+      intro = ["门槛完成度", "逐批查看" + bucketShortName(selectedBucket()) + "的累计曝光与门槛。"];
+    }
+    if (state.metric === "ctr" && supportsMetric()) {
+      intro[1] += " 当前图按 CTR 实际范围缩放，真实的 0 值会保留。";
+    }
+    return '<div class="chartintro"><b>' + esc(intro[0]) + '</b><span>' + esc(intro[1]) + '</span></div>';
+  }
+
+  function chartLegend() {
+    if (state.view === "date" && activeChart() === "trend") {
+      return '<div class="legendrow"><span class="legendkey"><i class="legendline"></i>' +
+        metricName() + '</span><span class="legendkey"><i class="legendline" ' +
+        'style="background:#0F766E"></i>7 日均线</span><span class="legendkey">' +
+        '<i class="legenddash"></i>前一周期</span><span class="legendkey">' +
+        '<i class="legenddot" style="background:#B45309"></i>批次上线</span></div>';
+    }
+    if (state.view === "date" && activeChart() === "composition") {
+      return '<div class="legendrow">' + stackedBucketDefs().map(function (bucket) {
+        return '<span class="legendkey"><i class="legenddot" style="background:' + bucket.color +
+          '"></i>' + esc(bucket.name) + '</span>';
+      }).join("") + '</div>';
+    }
+    if (state.view === "date" && activeChart() === "heatmap") {
+      return '<div class="legendrow"><span class="heatscale">低 <i class="heatgradient"></i> 高</span>' +
+        '<span>颜色深浅只表示相对大小，单元格内保留数值</span></div>';
+    }
+    if (state.view === "batch" && activeChart() === "bullet") {
+      return '<div class="legendrow"><span class="legendkey"><i class="legenddot" ' +
+        'style="background:#2563EB"></i>当前曝光</span><span class="legendkey">' +
+        '<i class="legenddot" style="background:#B45309"></i>门槛</span></div>';
+    }
+    return "";
+  }
+
+  function batchLaunchEvents(rows) {
+    var bucket = selectedBucket();
+    var visibleDates = new Set(rows.map(function (row) { return row.date; }));
+    var byDate = {};
+    BATCHES.forEach(function (batch) {
+      if (!batch.start || !visibleDates.has(batch.start)) return;
+      var cell = bucket ? batch.buckets.find(function (item) {
+        return item.id === bucket.id;
+      }) : batch.buckets[0];
+      if (!cell) return;
+      var def = bucket || bucketDef(cell.id);
+      (byDate[batch.start] = byDate[batch.start] || []).push({
+        bucket: def ? bucketShortName(def) : cell.id,
+        label: batchLabel(batch)
+      });
+    });
+    return Object.keys(byDate).sort().map(function (date) {
+      var items = byDate[date].sort(function (a, b) {
+        return (a.bucket + a.label).localeCompare(b.bucket + b.label);
+      });
+      return { date: date, items: items };
+    });
+  }
+
+  function rollingAverage(day) {
+    var index = DAYS.findIndex(function (item) { return item.date === day.date; });
+    var values = DAYS.slice(Math.max(0, index - 6), index + 1).map(chartDayValue)
+      .filter(function (value) { return value !== null; });
+    return values.length ? values.reduce(function (sum, value) { return sum + value; }, 0) / values.length : null;
+  }
+
+  function lineChart() {
+    var rows = filteredDays();
+    var prev = previousDateRows();
+    var W = 1080;
+    var H = 250;
+    var m = { l: 54, r: 24, t: 32, b: 36 };
+    var iw = W - m.l - m.r;
+    var ih = H - m.t - m.b;
+    var values = rows.map(chartDayValue);
+    var averages = rows.map(rollingAverage);
+    var prevValues = prev.map(chartDayValue);
+    var allValues = values.concat(averages, prevValues)
+      .filter(function (value) { return value !== null; });
+    var yMin = 0;
+    var yMax = Math.max.apply(null, allValues.concat([1])) * 1.13;
+    if (state.metric === "ctr") {
+      var dataMin = Math.min.apply(null, allValues);
+      var dataMax = Math.max.apply(null, allValues);
+      var span = Math.max(dataMax - dataMin, .03);
+      yMin = Math.max(0, dataMin - span * .35);
+      yMax = dataMax + span * .35;
+    }
+    var yScale = function (value) { return (value - yMin) / Math.max(yMax - yMin, .0001); };
+    var step = iw / Math.max(rows.length, 1);
+    var currentPoints = rows.map(function (day, index) {
+      return {
+        d: day,
+        v: values[index],
+        x: m.l + step * index + step / 2,
+        y: values[index] === null ? null : m.t + ih - yScale(values[index]) * ih
+      };
+    });
+    var prevPoints = prev.map(function (day, index) {
+      return {
+        d: day,
+        v: prevValues[index],
+        x: m.l + step * index + step / 2,
+        y: prevValues[index] === null ? null : m.t + ih - yScale(prevValues[index]) * ih
+      };
+    });
+    var averagePoints = rows.map(function (day, index) {
+      return {
+        d: day,
+        v: averages[index],
+        x: m.l + step * index + step / 2,
+        y: averages[index] === null ? null : m.t + ih - yScale(averages[index]) * ih
+      };
+    });
+    var svg = '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="' +
+      metricName() + '按日期趋势">';
+    for (var i = 0; i <= 4; i++) {
+      var y = m.t + ih * i / 4;
+      svg += '<line x1="' + m.l + '" y1="' + y + '" x2="' + (W - m.r) + '" y2="' + y +
+        '" stroke="#E7EDF5"/>';
+      svg += '<text x="' + (m.l - 9) + '" y="' + (y + 4) +
+        '" text-anchor="end" font-size="10" fill="#94A3B8">' +
+        valueText(yMin + (yMax - yMin) * (1 - i / 4)) + '</text>';
+    }
+    batchLaunchEvents(rows).forEach(function (event) {
+      var index = rows.findIndex(function (day) { return day.date === event.date; });
+      if (index < 0) return;
+      var x = currentPoints[index].x;
+      var title = full(event.date) + " · " + event.items.length + " 个批次上线\n" +
+        event.items.map(function (item) { return item.bucket + " · " + item.label; }).join("\n");
+      svg += '<g class="batchmark" data-launch-date="' + event.date +
+        '" tabindex="0" role="button" aria-label="' + esc(title) + '">' +
+        '<title>' + esc(title) + '</title>' +
+        '<rect class="batchhit" x="' + (x - 8) + '" y="' + (m.t - 20) +
+        '" width="16" height="26"/>' +
+        '<line class="batchstem" x1="' + x + '" y1="' + (m.t - 9) + '" x2="' + x +
+        '" y2="' + (m.t + ih) + '" stroke="#B45309" stroke-width="1.2" stroke-dasharray="4 4"/>' +
+        '<circle class="batchdot" cx="' + x + '" cy="' + (m.t - 9) +
+        '" r="3.4" fill="#B45309" stroke="#fff" stroke-width="1.5"/></g>';
+    });
+    if (prevPoints.length) {
+      var prevPath = "";
+      var prevDrawing = false;
+      prevPoints.forEach(function (point) {
+        if (point.v === null || point.y === null) { prevDrawing = false; return; }
+        prevPath += (prevDrawing ? "L" : "M") + point.x.toFixed(1) + "," + point.y.toFixed(1);
+        prevDrawing = true;
+      });
+      svg += '<path d="' + prevPath + '" fill="none" stroke="#94A3B8" stroke-width="1.8" ' +
+        'stroke-dasharray="6 5"/>';
+      prevPoints.forEach(function (point) {
+        if (point.v === null || point.y === null) return;
+        svg += '<circle cx="' + point.x + '" cy="' + point.y + '" r="2.5" fill="#94A3B8"><title>' +
+          full(point.d.date) + " " + metricName() + " " + valueText(point.v) + '</title></circle>';
       });
     }
-    return r.json();
-  }).then(function(d){ boot(d, keep); }).catch(function(e){
-    clearPanels();
-    if($("ttl")) $("ttl").textContent = "数据加载失败";
-    // 2026-10-12 修：这个日期标签原来不清，切到"库里还没有数据"的活动时会留着上一个活动的日子
-    if($("snaptag")) $("snaptag").textContent = "数据至 —";
-    $("subline").textContent = e.message +
-      (/^HTTP /.test(e.message) ? "——确认本地服务在跑（web/app.py，或双击 web/start.bat）" : "");
-  });
-}
-function currentView(){                        // 刷新前后要保住的界面状态
-  return { mode: state.mode, bs: state.bs };
-}
-function loadFetchState(){
-  if(window.__DATA__){                       // 单文件版没有服务：取数 / 刷新 / 切换器都藏起来
-    if($("fetchbtn")) $("fetchbtn").hidden = true;
-    if($("fetchstate")) $("fetchstate").hidden = true;
-    if($("actsel")) $("actsel").hidden = true;
-    if($("todobtn")) $("todobtn").hidden = true;
-    if($("refresh")) $("refresh").style.marginLeft = "auto";
-    return;
+    var path = "";
+    var drawing = false;
+    currentPoints.forEach(function (point) {
+      if (point.v === null || point.y === null) { drawing = false; return; }
+      path += (drawing ? "L" : "M") + point.x.toFixed(1) + "," + point.y.toFixed(1);
+      drawing = true;
+    });
+    svg += '<path d="' + path + '" fill="none" stroke="#1D4ED8" stroke-width="2.4" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/>';
+    var averagePath = "";
+    var averageDrawing = false;
+    averagePoints.forEach(function (point) {
+      if (point.v === null || point.y === null) { averageDrawing = false; return; }
+      averagePath += (averageDrawing ? "L" : "M") + point.x.toFixed(1) + "," + point.y.toFixed(1);
+      averageDrawing = true;
+    });
+    svg += '<path d="' + averagePath + '" fill="none" stroke="#0F766E" stroke-width="1.8" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/>';
+    currentPoints.forEach(function (point, index) {
+      if (rows.length <= 10 || index % 2 === 0 || index === rows.length - 1) {
+        svg += '<text x="' + point.x + '" y="' + (H - 11) +
+          '" text-anchor="middle" font-size="10" fill="#64748B">' + short(point.d.date) + '</text>';
+      }
+      if (point.v === null || point.y === null) return;
+      svg += '<circle cx="' + point.x + '" cy="' + point.y + '" r="' +
+        (point.d.partial ? 4.3 : 3.1) + '" fill="' + (point.d.partial ? "#fff" : "#1D4ED8") +
+        '" stroke="' + (point.d.partial ? "#B45309" : "#fff") +
+        '" stroke-width="1.8"><title>' + full(point.d.date) + " " + metricName() + " " +
+        valueText(point.v) + (point.d.partial ? "（未完整日）" : "") + '</title></circle>';
+    });
+    return svg + "</svg>";
   }
-  if(!AID) return;                           // 活动清单还没到手，等它来了再问
-  fetch("api/fetch/status" + actQuery(), { cache:"no-store" }).then(function(r){ return r.json(); }).then(function(st){
-    var btn = $("fetchbtn");
-    FRESH = {lastFetchTime: st.lastFetchTime || "", auto: st.auto || null};
-    if(DATA) renderHead();
-    if(!btn) return;
-    // 一天只取一次（昨天是终值）；别的活动在取数时也点不了——浏览器只有一只，取数是串行的。
-    // 2026-10-09 起取数是**一次刷全部活动**，所以禁用看 todayDoneAll（所有活动都取过才算今天取过）
-    btn.disabled = !!st.running || !!st.busy || !!st.todayDoneAll;
-    // 按钮只剩图标（2026-09-28 用户定：基本永远"今天已取"，文字占地方）——状态全放悬浮提示
-    var recent = st.lastFetchTime ? (" · 最近取数 " + st.lastFetchTime) : "";
-    btn.title = st.busy ? ("另一个活动正在取数（" + st.busyWith + "），等这一批跑完再点")
-              : (st.running ? "取数中…"
-              : (st.todayDoneAll ? ("今天所有活动都已取数" + (st.lastFetchTime ? "（" + st.lastFetchTime + "）" : ""))
-              : ((st.todayDone ? "取数（本活动今天已取，会把还没取的活动补上）"
-                               : "取数（把昨天的数固定下来）") + recent)));
-  }).catch(function(){});
-}
-function statemsg(text, cls){                  // 页头那行只用来报"正在进行 / 完毕"
-  var el = $("fetchstate");
-  el.className = "hint" + (cls ? " " + cls : "");
-  el.textContent = text || "";
-}
-function clearStatemsgLater(ms){
-  setTimeout(function(){ statemsg(""); }, ms || 4000);
-}
-function pollFetch(keep, single){
-  // 2026-10-09：一次刷**全部活动**（服务端按 `?all=1` 给这一批的进度），所以轮询的是批次，
-  // 不是"当前活动"——页头那行显示"正在刷新 2/3：火山…"，跑完一次性换表 + 刷角标。
-  // `single`（2026-10-12）：收尾的活动只跑它自己，这时没有批次可看——直接看它自己的状态，
-  // 否则会读到**上一次整批**留下的旧 batch，页面立刻报"完毕"，其实还在跑。
-  fetch("api/fetch/status" + actQuery(single ? "" : "all=1"), { cache:"no-store" }).then(function(r){ return r.json(); }).then(function(st){
-    // 服务端还是旧版（页面是静态文件、立刻生效；app.py 改了要重启服务）→ 退回"只看当前活动"的老轮询，
-    // 否则这里会把"没有 batch 字段"当成"已跑完"，刷新看起来秒完成、表格其实没换。
-    if(single || !st.batch){
-      var w0 = (st.mode === "today") ? "刷新" : "取数";
-      if(st.running || st.busy){
-        statemsg(st.running ? ("正在" + w0 + "…") : ("正在取数（" + st.busyWith + "）…"));
-        setTimeout(function(){ pollFetch(keep, single); }, 400);
+
+  function stackedChart() {
+    var rows = filteredDays();
+    var defs = stackedBucketDefs();
+    var W = 1080;
+    var H = 260;
+    var m = { l: 52, r: 24, t: 22, b: 38 };
+    var iw = W - m.l - m.r;
+    var ih = H - m.t - m.b;
+    var max = Math.max.apply(null, rows.map(function (day) { return day.clicks; }).concat([1])) * 1.13;
+    var step = iw / Math.max(rows.length, 1);
+    var barW = Math.max(6, Math.min(32, step * .62));
+    var svg = '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="每日点击按桶构成">';
+    for (var i = 0; i <= 4; i++) {
+      var y = m.t + ih * i / 4;
+      svg += '<line x1="' + m.l + '" y1="' + y + '" x2="' + (W - m.r) + '" y2="' + y +
+        '" stroke="#E7EDF5"/>';
+      svg += '<text x="' + (m.l - 9) + '" y="' + (y + 4) +
+        '" text-anchor="end" font-size="10" fill="#94A3B8">' +
+        Math.round(max * (1 - i / 4)) + '</text>';
+    }
+    rows.forEach(function (day, index) {
+      var x = m.l + step * index + (step - barW) / 2;
+      var yBase = m.t + ih;
+      defs.forEach(function (def) {
+        var clicks;
+        if (def.id === "other") {
+          clicks = day.buckets.filter(function (cell) {
+            return !topBucketDefs(5).some(function (top) { return top.id === cell.id; });
+          }).reduce(function (sum, cell) { return sum + cell.clicks; }, 0);
+        } else {
+          var cell = day.buckets.find(function (item) { return item.id === def.id; });
+          clicks = cell ? cell.clicks : 0;
+        }
+        var height = clicks / max * ih;
+        yBase -= height;
+        svg += '<rect x="' + x.toFixed(1) + '" y="' + yBase.toFixed(1) + '" width="' +
+          barW.toFixed(1) + '" height="' + height.toFixed(1) + '" fill="' + def.color +
+          '" opacity=".9"><title>' + full(day.date) + " " + esc(def.name) + " 点击 " +
+          fmt(clicks) + '</title></rect>';
+      });
+      if (rows.length <= 10 || index % 2 === 0 || index === rows.length - 1) {
+        svg += '<text x="' + (x + barW / 2) + '" y="' + (H - 13) +
+          '" text-anchor="middle" font-size="10" fill="#64748B">' + short(day.date) + '</text>';
+      }
+    });
+    return svg + "</svg>";
+  }
+
+  function heatmapChart() {
+    var rows = selectedBucket() ? [selectedBucket()] : BUCKETS;
+    var cols = filteredDays();
+    var values = rows.map(function (row) {
+      return cols.map(function (col) {
+        var cell = col.buckets.find(function (item) { return item.id === row.id; });
+        return valueOfCell(cell, state.metric);
+      });
+    });
+    var flat = values.flat();
+    var max = Math.max.apply(null, flat.concat([1]));
+    var min = Math.min.apply(null, flat.concat([0]));
+    return '<div class="heatgrid" style="grid-template-columns:112px repeat(' + cols.length +
+      ',minmax(42px,1fr))"><span></span>' +
+      cols.map(function (col) { return '<span class="heatx">' + short(col.date) + '</span>'; }).join("") +
+      rows.map(function (row, rowIndex) {
+        return '<span class="heatlabel"><i class="slotdot" style="background:' + row.color +
+          ';margin-right:5px"></i>' + esc(row.name) + '</span>' +
+          cols.map(function (col, colIndex) {
+            var value = values[rowIndex][colIndex];
+            var ratio = max === min ? .35 : (value - min) / (max - min);
+            var background = state.metric === "ctr"
+              ? "rgba(29,78,216," + (.07 + ratio * .28) + ")"
+              : "rgba(29,78,216," + (.06 + ratio * .72) + ")";
+            var color = ratio > .58 ? "#fff" : "#27364A";
+            return '<span class="heatcell" style="background:' + background + ";color:" + color +
+              '" title="' + full(col.date) + " · " + esc(row.name) + " · " + metricName() + " " +
+              (state.metric === "ctr" ? value.toFixed(2) + "%" : fmt(value)) + '">' +
+              (state.metric === "ctr" ? value.toFixed(2) : Math.round(value)) + '</span>';
+          }).join("");
+      }).join("") + '</div>';
+  }
+
+  function miniLine(values, color, labels) {
+    var W = 180;
+    var H = 84;
+    var m = { l: 8, r: 8, t: 8, b: 16 };
+    var iw = W - m.l - m.r;
+    var ih = H - m.t - m.b;
+    var max = Math.max.apply(null, values.concat([1])) * 1.12;
+    var step = iw / Math.max(values.length - 1, 1);
+    var points = values.map(function (value, index) {
+      return [m.l + step * index, m.t + ih - value / max * ih];
+    });
+    var path = points.map(function (point, index) {
+      return (index ? "L" : "M") + point[0].toFixed(1) + "," + point[1].toFixed(1);
+    }).join(" ");
+    var labelText = function (value) {
+      return value.length === 10 ? value.slice(5).replace("-", "/") : value;
+    };
+    return '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="分桶趋势">' +
+      points.map(function (point, index) {
+        return '<circle cx="' + point[0] + '" cy="' + point[1] + '" r="2.3" fill="' + color +
+          '"><title>' + esc(labels[index]) + " " + valueText(values[index]) + '</title></circle>';
+      }).join("") + '<path d="' + path + '" fill="none" stroke="' + color +
+      '" stroke-width="1.8"/><text x="' + m.l + '" y="' + (H - 3) +
+      '" font-size="7.5" fill="#94A3B8">' + labelText(labels[0]) +
+      '</text><text x="' + (W - m.r) + '" y="' + (H - 3) +
+      '" text-anchor="end" font-size="7.5" fill="#94A3B8">' +
+      labelText(labels[labels.length - 1]) + '</text></svg>';
+  }
+
+  function smallMultiples() {
+    var cols = filteredDays();
+    return '<div class="sm-grid">' + topBucketDefs(5).map(function (def) {
+      var values = cols.map(function (col) {
+        return valueOfCell(col.buckets.find(function (item) { return item.id === def.id; }), state.metric);
+      });
+      var labels = cols.map(function (col) { return full(col.date); });
+      return '<div class="sm-card"><div class="sm-cardhead"><i class="legenddot" style="background:' +
+        def.color + '"></i><span>' + esc(def.name) + '</span><b>' +
+        valueText(values[values.length - 1]) + '</b></div>' +
+        miniLine(values, def.color, labels) + '</div>';
+    }).join("") + '</div>';
+  }
+
+  function batchChartValue(batch) {
+    return metricValue(batchMetrics(batch));
+  }
+
+  function batchTrendChart() {
+    var rows = selectedBatches();
+    if (!rows.length) return '<div class="empty">当前分桶没有批次数据</div>';
+    var values = rows.map(batchChartValue);
+    var W = 1080;
+    var H = 250;
+    var m = { l: 54, r: 24, t: 30, b: 40 };
+    var iw = W - m.l - m.r;
+    var ih = H - m.t - m.b;
+    var yMin = 0;
+    var yMax = Math.max.apply(null, values.concat([1])) * 1.13;
+    if (state.metric === "ctr") {
+      var dataMin = Math.min.apply(null, values);
+      var dataMax = Math.max.apply(null, values);
+      var span = Math.max(dataMax - dataMin, .03);
+      yMin = Math.max(0, dataMin - span * .35);
+      yMax = dataMax + span * .35;
+    }
+    var yScale = function (value) { return (value - yMin) / Math.max(yMax - yMin, .0001); };
+    var step = iw / Math.max(rows.length, 1);
+    var points = rows.map(function (batch, index) {
+      return {
+        batch: batch,
+        value: values[index],
+        x: m.l + step * index + step / 2,
+        y: m.t + ih - yScale(values[index]) * ih
+      };
+    });
+    var svg = '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="所选分桶批次趋势">';
+    for (var i = 0; i <= 4; i++) {
+      var y = m.t + ih * i / 4;
+      svg += '<line x1="' + m.l + '" y1="' + y + '" x2="' + (W - m.r) + '" y2="' + y +
+        '" stroke="#E7EDF5"/>';
+      svg += '<text x="' + (m.l - 9) + '" y="' + (y + 4) +
+        '" text-anchor="end" font-size="10" fill="#94A3B8">' +
+        valueText(yMin + (yMax - yMin) * (1 - i / 4)) + '</text>';
+    }
+    var path = points.map(function (point, index) {
+      return (index ? "L" : "M") + point.x.toFixed(1) + "," + point.y.toFixed(1);
+    }).join(" ");
+    svg += '<path d="' + path + '" fill="none" stroke="#1D4ED8" stroke-width="2.3" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/>';
+    points.forEach(function (point, index) {
+      if (rows.length <= 10 || index % 2 === 0 || index === rows.length - 1) {
+        svg += '<text x="' + point.x + '" y="' + (H - 12) +
+          '" text-anchor="middle" font-size="9" fill="#64748B">' +
+          bucketBatchLabel(point.batch).replace(" · 初始", "") + '</text>';
+      }
+      svg += '<circle cx="' + point.x + '" cy="' + point.y + '" r="3.2" fill="#1D4ED8" ' +
+        'stroke="#fff" stroke-width="1.5"><title>' + bucketBatchLabel(point.batch) + " · " +
+        esc(batchLabel(point.batch)) + " · " + metricName() + " " + valueText(point.value) +
+        '</title></circle>';
+    });
+    return svg + "</svg>";
+  }
+
+  function batchBarsChart() {
+    var rows = selectedBatches().slice().reverse();
+    if (!rows.length) return '<div class="empty">当前分桶没有批次数据</div>';
+    var values = rows.map(batchChartValue);
+    var max = Math.max.apply(null, values.concat([1]));
+    return '<div class="batchbars">' + rows.map(function (batch, index) {
+      return '<div class="batchbarrow"><div class="batchbarname" title="' +
+        esc(batchLabel(batch)) + '">' + bucketBatchLabel(batch) + '</div>' +
+        '<div class="batchbarline"><i style="width:' +
+        Math.max(2, values[index] / max * 100) + '%"></i></div>' +
+        '<div class="batchbarvalue">' + valueText(values[index]) + '</div></div>';
+    }).join("") + '</div>';
+  }
+
+  function bulletChart() {
+    var def = selectedBucket();
+    var rows = selectedBatches().slice().reverse();
+    if (!def || !rows.length) return '<div class="empty">当前分桶没有批次数据</div>';
+    return '<div class="bulletwrap">' + rows.map(function (batch) {
+      var cell = batch.buckets.find(function (item) { return item.id === def.id; });
+      var exposure = Number(cell.judgeExposure != null ? cell.judgeExposure : cell.exposure);
+      var ratio = Math.min(100, exposure / def.threshold * 100);
+      return '<div class="bulletrow"><div class="bulletname" title="' + esc(batchLabel(batch)) +
+        '">' + bucketBatchLabel(batch) + '</div><div style="position:relative;height:20px">' +
+        '<div style="position:absolute;left:0;right:0;top:6px;height:8px;background:#E9EFF6;' +
+        'border-radius:4px"></div><div style="position:absolute;left:0;width:' + ratio +
+        '%;top:6px;height:8px;background:#2563EB;border-radius:4px"></div>' +
+        '<i title="门槛 ' + fmt(def.threshold) + '" style="position:absolute;left:100%;top:2px;' +
+        'height:16px;border-left:2px solid #B45309"></i></div><div class="bulletvalue">' +
+        fmt(exposure) + " / " + fmt(def.threshold) + " · " + ratio.toFixed(0) +
+        '%</div></div>';
+    }).join("") + '</div>';
+  }
+
+  function chartMarkup() {
+    if (state.view === "date" && state.dateChart === "trend") return lineChart();
+    if (state.view === "date" && state.dateChart === "composition") return stackedChart();
+    if (state.view === "date" && state.dateChart === "heatmap") return heatmapChart();
+    if (state.view === "date" && state.dateChart === "small") return smallMultiples();
+    if (state.view === "batch" && state.batchChart === "trend") return batchTrendChart();
+    if (state.view === "batch" && state.batchChart === "bars") return batchBarsChart();
+    return bulletChart();
+  }
+
+  function chartArea() {
+    return '<div class="chartarea">' + chartToolbar() + chartIntro() +
+      '<div class="chartbox">' + chartMarkup() + '</div><div id="chartlegend">' +
+      chartLegend() + '</div></div>';
+  }
+
+  function exposureChangeMarkup(now, before, suppress) {
+    if (suppress || before === null || before === undefined) return '<span class="dim">—</span>';
+    var diff = now - before;
+    if (diff === 0) return '<span class="dim">0 / 0.0%</span>';
+    var rate = before ? diff / before * 100 : null;
+    return '<span class="' + (diff > 0 ? "up" : "down") + '">' +
+      (diff > 0 ? "+" : "") + fmt(diff) + " / " +
+      (rate === null ? "—" : (rate >= 0 ? "+" : "") + rate.toFixed(1) + "%") + '</span>';
+  }
+
+  function ctrChangeMarkup(now, before, suppress) {
+    if (suppress || before === null || before === undefined) return '<span class="dim">—</span>';
+    var diff = (now - before) * 100;
+    if (Math.abs(diff) < .005) return '<span class="dim">0.00pp</span>';
+    return '<span class="' + (diff > 0 ? "up" : "down") + '">' + pp(diff / 100) + '</span>';
+  }
+
+  function inlineDateDetail(day) {
+    var index = DAYS.findIndex(function (item) { return item.date === day.date; });
+    var prev = index > 0 ? DAYS[index - 1] : null;
+    var bucket = selectedBucket();
+    var cells = bucket ? day.buckets.filter(function (cell) { return cell.id === bucket.id; }) : day.buckets;
+    return cells.map(function (cell) {
+      var def = bucketDef(cell.id);
+      var prevCell = prev ? prev.buckets.find(function (item) { return item.id === cell.id; }) : null;
+      var started = isBucketStarted(day, cell.id);
+      var prevCtr = prevCell && prevCell.exposure ? prevCell.clicks / prevCell.exposure : null;
+      return '<tr class="bucket-detail-row" data-detail-date="' + day.date + '"><td>' +
+        '<i class="slotdot" style="background:' + def.color + '"></i>' + esc(def.name) + '</td>' +
+        '<td class="n num">' + (started ? fmt(cell.exposure) : '<span class="dim">—</span>') + '</td>' +
+        '<td class="n num">' + (started ? fmt(cell.clicks) : '<span class="dim">—</span>') + '</td>' +
+        '<td class="n num">' + exposureChangeMarkup(cell.exposure,
+          prevCell && prevCell.exposure, !started || day.partial) + '</td>' +
+        '<td class="n num">' + (started ? pct(cell.ctr) : '<span class="dim">—</span>') + '</td>' +
+        '<td class="n num">' + ctrChangeMarkup(cell.ctr, prevCtr, !started || day.partial) + '</td></tr>';
+    }).join("");
+  }
+
+  function openRowDetail(id) {
+    var index = state.expandedDates.indexOf(id);
+    if (index >= 0) state.expandedDates.splice(index, 1);
+    else state.expandedDates.push(id);
+    renderTableAnchored(id);
+  }
+
+  function closeRowDetail() {
+    state.expandedDates = [];
+    renderTableAnchored(null);
+  }
+
+  function renderTableAnchored(id) {
+    var selector = id ? '[data-date="' + id + '"]' : null;
+    var oldRow = selector ? document.querySelector(selector) : null;
+    var anchorTop = oldRow ? oldRow.getBoundingClientRect().top : null;
+    var host = $("tablearea");
+    host.innerHTML = state.view === "date" ? dateTable() : batchTable();
+    requestAnimationFrame(function () {
+      var row = selector ? document.querySelector(selector) : null;
+      if (!row) return;
+      if (anchorTop !== null) window.scrollBy(0, row.getBoundingClientRect().top - anchorTop);
+      row.focus({ preventScroll: true });
+    });
+  }
+
+  function dateTable() {
+    var rows = filteredDays().slice().reverse();
+    var maxClicks = Math.max.apply(null, rows.map(function (day) {
+      return dayMetrics(day).clicks;
+    }).concat([1]));
+    return '<table class="dailyview"><colgroup><col style="width:24%"><col style="width:14%">' +
+      '<col style="width:14%"><col style="width:18%"><col style="width:14%"><col style="width:16%">' +
+      '</colgroup><thead><tr><th>日期</th><th class="n">曝光</th><th class="n">点击</th>' +
+      '<th class="n">曝光日变化</th><th class="n">点击率</th><th class="n">CTR 日变化</th>' +
+      '</tr></thead><tbody>' + rows.map(function (day) {
+        var index = DAYS.findIndex(function (item) { return item.date === day.date; });
+        var prev = index > 0 ? DAYS[index - 1] : null;
+        var metrics = dayMetrics(day);
+        var prevMetrics = prev ? dayMetrics(prev) : null;
+        var selected = state.expandedDates.indexOf(day.date) >= 0;
+        var started = !selectedBucket() || isBucketStarted(day, selectedBucket().id);
+        return '<tr class="dayrow ' + (selected ? "picked" : "") + '" data-date="' + day.date +
+          '" tabindex="0" aria-expanded="' + selected + '"><td><span class="datelabel"><span>' +
+          short(day.date) + " 周" + day.weekday + '</span>' +
+          (day.partial ? '<span class="badge partial">未完整</span>' : "") + '</span></td>' +
+          '<td class="n num">' + (started ? fmt(metrics.exposure) : '<span class="dim">—</span>') + '</td>' +
+          '<td class="n num">' + (started ? fmt(metrics.clicks) +
+            '<span class="clickbarwrap"><span class="clickbar" style="width:' +
+            Math.max(4, metrics.clicks / maxClicks * 100) + '%"></span></span>' :
+            '<span class="dim">—</span>') + '</td><td class="n num">' +
+          exposureChangeMarkup(metrics.exposure, prevMetrics && prevMetrics.exposure,
+            !started || day.partial) + '</td><td class="n num">' +
+          (started ? pct(metrics.ctr) : '<span class="dim">—</span>') + '</td>' +
+          '<td class="n num">' + ctrChangeMarkup(metrics.ctr,
+            prevMetrics && prevMetrics.ctr, !started || day.partial) + '</td></tr>' +
+          (selected ? inlineDateDetail(day) : "");
+      }).join("") + '</tbody></table>';
+  }
+
+  function batchTable() {
+    var chronological = selectedBatches();
+    var rows = chronological.slice().reverse();
+    if (!rows.length) return '<div class="empty">当前分桶没有可展示的批次数据</div>';
+    return '<table class="batchtable"><colgroup><col style="width:22%"><col style="width:15%">' +
+      '<col style="width:9%"><col style="width:14%"><col style="width:14%"><col style="width:12%">' +
+      '<col style="width:14%"></colgroup><thead><tr><th>批次</th><th>起投日</th>' +
+      '<th class="n" title="任务状态为进行中时算到今天；下线后冻结在最后一个有数据日">进行天数</th>' +
+      '<th class="n">总曝光</th><th class="n">总点击</th>' +
+      '<th class="n">总点击率</th><th class="n">曝光变化</th></tr></thead><tbody>' +
+      rows.map(function (batch) {
+        var index = chronological.indexOf(batch);
+        var prev = index > 0 ? chronological[index - 1] : null;
+        var metrics = batchMetrics(batch);
+        var prevMetrics = prev ? batchMetrics(prev) : null;
+        return '<tr><td><b title="' +
+          esc(batch.label === "首批" ? "活动初始配置生成的批次" : batch.label) + '">' +
+          bucketBatchLabel(batch) + '</b></td><td>' + short(metrics.first || batch.start) +
+          '</td><td class="n num">' + metrics.days + '</td><td class="n num">' +
+          fmt(metrics.exposure) + '</td><td class="n num">' + fmt(metrics.clicks) +
+          '</td><td class="n num">' + pct(metrics.ctr) + '</td><td class="n num">' +
+          exposureChangeMarkup(metrics.exposure, prevMetrics && prevMetrics.exposure, false) +
+          '</td></tr>';
+      }).join("") + '</tbody></table>';
+  }
+
+  function syncViewControls() {
+    document.querySelectorAll("[data-view]").forEach(function (button) {
+      button.classList.toggle("on", button.dataset.view === state.view);
+    });
+    document.querySelectorAll("[data-analysismode]").forEach(function (button) {
+      button.classList.toggle("on", button.dataset.analysismode === state.analysisMode);
+    });
+  }
+
+  function syncChartControls() {
+    document.querySelectorAll("[data-datechart]").forEach(function (button) {
+      button.classList.toggle("on", button.dataset.datechart === state.dateChart);
+    });
+    document.querySelectorAll("[data-batchchart]").forEach(function (button) {
+      button.classList.toggle("on", button.dataset.batchchart === state.batchChart);
+    });
+    var disabled = !supportsMetric();
+    document.querySelectorAll("[data-metric]").forEach(function (button) {
+      button.disabled = disabled;
+      button.classList.toggle("on", !disabled && state.metric === button.dataset.metric);
+    });
+  }
+
+  function updateChartContent() {
+    var area = document.querySelector("#chartarea .chartarea");
+    if (!area) return;
+    syncChartControls();
+    var intro = area.querySelector(".chartintro");
+    if (intro) intro.outerHTML = chartIntro();
+    var box = area.querySelector(".chartbox");
+    if (box) box.innerHTML = chartMarkup();
+    var legend = area.querySelector("#chartlegend");
+    if (legend) legend.innerHTML = chartLegend();
+  }
+
+  function renderChartArea(force) {
+    var host = $("chartarea");
+    if (state.analysisMode !== "chart") {
+      host.innerHTML = "";
+      return;
+    }
+    if (force || !host.querySelector(".chartarea")) host.innerHTML = chartArea();
+    else updateChartContent();
+  }
+
+  function renderHead() {
+    var title = (ACTIVE_ACTIVITY && ACTIVE_ACTIVITY.label) || (DATA && DATA.label) || "投放看板";
+    document.title = "投放看板 · " + title;
+    $("ttl").textContent = title;
+    $("coverage").textContent = "起投 " + FIRST + " · 数据至 " + LAST;
+  }
+
+  function renderAll(preserveScroll) {
+    var y = window.scrollY;
+    syncViewControls();
+    var select = $("actsel");
+    if (select) {
+      select.innerHTML = ACTIVITIES.map(function (activity) {
+        return '<option value="' + esc(activity.id) + '"' +
+          (activity.id === AID ? " selected" : "") + ">" + esc(activity.label) + '</option>';
+      }).join("");
+      select.value = AID || "";
+      select.hidden = true;
+    }
+    renderActivityPicker();
+    $("ttl").hidden = !!ACTIVITIES.length;
+    renderHead();
+    $("filterbar").innerHTML = state.view === "date" ? dateFilterMarkup() : batchFilterMarkup();
+    $("summary").innerHTML = summaryMarkup();
+    updateThresholdButton();
+    renderChartArea(true);
+    $("tablearea").innerHTML = state.analysisMode === "detail"
+      ? (state.view === "date" ? dateTable() : batchTable()) : "";
+    if (preserveScroll) {
+      requestAnimationFrame(function () {
+        window.scrollTo(0, Math.min(y,
+          Math.max(0, document.documentElement.scrollHeight - innerHeight)));
+      });
+    }
+  }
+
+  function setDateRange(start, end) {
+    if (!start || !end) return;
+    if (start > end) {
+      var swap = start;
+      start = end;
+      end = swap;
+    }
+    state.start = start < FIRST ? FIRST : start;
+    state.end = end > LAST ? LAST : end;
+    state.size = null;
+    state.expandedDates = [];
+    renderAll(true);
+  }
+
+  function currentView() {
+    if (!state) return null;
+    return {
+      view: state.view,
+      size: state.size,
+      start: state.start,
+      end: state.end,
+      bucket: state.bucket,
+      metric: state.metric,
+      analysisMode: state.analysisMode,
+      dateChart: state.dateChart,
+      batchChart: state.batchChart,
+      expandedDates: state.expandedDates.slice()
+    };
+  }
+
+  function statemsg(text, cls) {
+    var element = $("fetchstate");
+    element.className = "hint" + (cls ? " " + cls : "");
+    element.textContent = text || "";
+  }
+
+  function clearStatemsgLater(delay) {
+    setTimeout(function () { statemsg(""); }, delay || 4000);
+  }
+
+  function actQuery(extra) {
+    var parts = [];
+    if (AID) parts.push("activity=" + encodeURIComponent(AID));
+    if (extra) parts.push(extra);
+    return parts.length ? "?" + parts.join("&") : "";
+  }
+
+  function actsHas(id) {
+    return ACTIVITIES.some(function (activity) { return activity.id === id; });
+  }
+
+  function clearPanels() {
+    ["filterbar", "summary", "chartarea", "tablearea"].forEach(function (id) {
+      var element = $(id);
+      if (element) element.innerHTML = "";
+    });
+    $("coverage").textContent = "";
+  }
+
+  function activityOptionLabel(activity) {
+    return activity.label +
+      (activity.ended ? "（已收尾）" : ((activity.db && activity.db.days) ? "" : "（库里还没有数据）"));
+  }
+
+  function renderActivityPicker() {
+    var picker = $("activitypicker");
+    var current = $("activitycurrent");
+    var menu = $("activitymenu");
+    if (!picker || !current || !menu) return;
+    picker.hidden = !ACTIVITIES.length;
+    if (!ACTIVITIES.length) return;
+    var active = ACTIVITIES.find(function (activity) { return activity.id === AID; }) || ACTIVITIES[0];
+    current.textContent = activityOptionLabel(active);
+    menu.innerHTML = ACTIVITIES.map(function (activity) {
+      return '<button type="button" class="activityoption" role="option" data-activityvalue="' +
+        esc(activity.id) + '" aria-selected="' + (activity.id === AID ? "true" : "false") + '">' +
+        esc(activityOptionLabel(activity)) + '</button>';
+    }).join("");
+  }
+
+  function closeActivityPicker(focusToggle) {
+    var picker = $("activitypicker");
+    var menu = $("activitymenu");
+    var toggle = document.querySelector("[data-activitytoggle]");
+    if (picker) picker.classList.remove("open");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+    if (menu) menu.hidden = true;
+    if (focusToggle && toggle) toggle.focus({ preventScroll: true });
+  }
+
+  function bootActivities(response) {
+    ACTIVITIES = (response && response.activities) || [];
+    var saved = null;
+    try { saved = localStorage.getItem(LS_KEY); } catch (error) { saved = null; }
+    AID = saved && actsHas(saved) ? saved : ((response && response.default) ||
+      (ACTIVITIES.length ? ACTIVITIES[0].id : null));
+    var select = $("actsel");
+    if (select) {
+      select.innerHTML = ACTIVITIES.map(function (activity) {
+        return '<option value="' + esc(activity.id) + '">' + esc(activityOptionLabel(activity)) +
+          '</option>';
+      }).join("");
+      select.value = AID || "";
+      select.hidden = true;
+    }
+    renderActivityPicker();
+    $("ttl").hidden = !!ACTIVITIES.length;
+  }
+
+  function loadActivities() {
+    fetch("api/activities", { cache: "no-store" }).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    }).then(function (response) {
+      bootActivities(response);
+      loadFromServer();
+      loadFetchState();
+    }).catch(function (error) {
+      $("fetchstate").textContent = "拿不到活动清单（" + error.message +
+        "）：确认本地服务在跑——web/app.py 或双击 web/start-hidden.vbs。";
+    });
+  }
+
+  function switchActivity(id, keep) {
+    if (!id || id === AID) return;
+    AID = id;
+    try { localStorage.setItem(LS_KEY, id); } catch (error) { /* ignore */ }
+    if ($("actsel")) $("actsel").value = id;
+    renderActivityPicker();
+    closeActivityPicker(false);
+    state = null;
+    clearPanels();
+    loadFromServer(keep || null);
+    loadFetchState();
+  }
+
+  function loadFromServer(keep) {
+    if (window.__DATA__) {
+      boot(window.__DATA__, keep);
+      return;
+    }
+    fetch("api/perf" + actQuery(), { cache: "no-store" }).then(function (response) {
+      if (!response.ok) {
+        return response.json().catch(function () { return {}; }).then(function (body) {
+          throw new Error(body.error || ("HTTP " + response.status));
+        });
+      }
+      return response.json();
+    }).then(function (payload) {
+      boot(payload, keep);
+    }).catch(function (error) {
+      clearPanels();
+      $("ttl").hidden = false;
+      $("ttl").textContent = "数据加载失败";
+      $("coverage").textContent = "数据至 —";
+      $("fetchstate").textContent = error.message +
+        (/^HTTP /.test(error.message) ? "——确认本地服务在跑（web/app.py，或双击 web/start-hidden.vbs）" : "");
+    });
+  }
+
+  function loadFetchState() {
+    if (window.__DATA__) {
+      ["fetchbtn", "fetchstate", "actsel", "activitypicker"].forEach(function (id) {
+        if ($(id)) $(id).hidden = true;
+      });
+      if ($("refresh")) $("refresh").style.marginLeft = "auto";
+      return;
+    }
+    if (!AID) return;
+    fetch("api/fetch/status" + actQuery(), { cache: "no-store" }).then(function (response) {
+      return response.json();
+    }).then(function (status) {
+      var button = $("fetchbtn");
+      if (!button) return;
+      button.disabled = !!status.running || !!status.busy || !!status.todayDoneAll;
+      var recent = status.lastFetchTime ? (" · 最近取数 " + status.lastFetchTime) : "";
+      button.title = status.busy
+        ? ("另一个活动正在取数（" + status.busyWith + "），等这一批跑完再点")
+        : (status.running ? "取数中…"
+        : (status.todayDoneAll
+          ? ("今天所有活动都已取数" + (status.lastFetchTime ? "（" + status.lastFetchTime + "）" : ""))
+          : ((status.todayDone ? "取数（本活动今天已取，会把还没取的活动补上）"
+            : "取数（把昨天的数固定下来）") + recent)));
+    }).catch(function () {});
+  }
+
+  function pollFetch(keep, single) {
+    fetch("api/fetch/status" + actQuery(single ? "" : "all=1"), { cache: "no-store" })
+      .then(function (response) { return response.json(); })
+      .then(function (status) {
+        if (single || !status.batch) {
+          var mode0 = status.mode === "today" ? "刷新" : "取数";
+          if (status.running || status.busy) {
+            statemsg(status.running ? ("正在" + mode0 + "…") :
+              ("正在取数（" + status.busyWith + "）…"));
+            setTimeout(function () { pollFetch(keep, single); }, 400);
+            return;
+          }
+          $("refresh").classList.remove("spin");
+          $("fetchbtn").classList.remove("spin");
+          if (status.ok) {
+            loadFromServer(keep);
+            statemsg(mode0 + "完毕！", "ok");
+            clearStatemsgLater();
+          } else if (status.error) {
+            statemsg(status.error, "warn");
+          }
+          setTimeout(loadFetchState, 2000);
+          return;
+        }
+        var batch = status.batch || {};
+        var items = batch.items || [];
+        var word = batch.mode === "today" ? "刷新" : "取数";
+        if (batch.running) {
+          var current = items.find(function (item) { return item.state === "running"; }) ||
+            items.find(function (item) { return item.state === "pending"; });
+          statemsg("正在" + word + "（" + Math.min(items.length, (batch.done || 0) + 1) + "/" +
+            items.length + (current ? "：" + current.label : "") + "）…");
+          setTimeout(function () { pollFetch(keep, single); }, 400);
+          return;
+        }
+        $("refresh").classList.remove("spin");
+        $("fetchbtn").classList.remove("spin");
+        var bad = items.filter(function (item) { return item.state === "error"; });
+        var okCount = items.filter(function (item) { return item.state === "ok"; }).length;
+        var skipped = items.filter(function (item) { return item.state === "skipped"; });
+        loadFromServer(keep);
+        if (bad.length) {
+          statemsg(word + "完毕：" + okCount + " 个成功、" + bad.length + " 个失败（" +
+            bad.map(function (item) { return item.label; }).join("、") + "）：" +
+            (bad[0].error || ""), "warn");
+        } else if (batch.mode === "today") {
+          statemsg("刷新完毕！", "ok");
+          clearStatemsgLater();
+        } else {
+          statemsg(word + "完毕！" + (items.length > 1 ? ("（" + okCount + " 个活动" +
+            (skipped.length ? "，跳过：" +
+              skipped.map(function (item) { return item.label; }).join("、") : "") + "）") : ""), "ok");
+          clearStatemsgLater();
+        }
+        setTimeout(loadFetchState, 2000);
+      }).catch(function () {
+        setTimeout(function () { pollFetch(keep, single); }, 1500);
+      });
+  }
+
+  function startFetch(todayOnly) {
+    var button = todayOnly ? $("refresh") : $("fetchbtn");
+    var keep = state ? currentView() : null;
+    if (todayOnly) {
+      button.classList.remove("spin");
+      void button.offsetWidth;
+      button.classList.add("spin");
+      statemsg("正在刷新…");
+    } else {
+      button.disabled = true;
+      button.classList.add("spin");
+      statemsg("正在取数…");
+    }
+    var currentActivity = ACTIVITIES.find(function (activity) { return activity.id === AID; });
+    var batched = !(currentActivity && currentActivity.ended);
+    var query = [];
+    if (batched) query.push("all=1");
+    if (todayOnly) query.push("today=1");
+    fetch("api/fetch" + actQuery(query.join("&")), { method: "POST" }).then(function (response) {
+      return response.json().then(function (body) { return { ok: response.ok, body: body }; });
+    }).then(function (result) {
+      if (!result.ok) {
+        button.classList.remove("spin");
+        var message = result.body.error || "取数没起来";
+        statemsg(message + (/登录|未授权|401|403/.test(message) ?
+          "（登录态过期就跑 wait_login.py）" : ""), "warn");
+        setTimeout(loadFetchState, 1500);
         return;
       }
-      if($("refresh")) $("refresh").classList.remove("spin");
-      if($("fetchbtn")) $("fetchbtn").classList.remove("spin");
-      if(st.ok){
-        loadFromServer(keep);
-        loadTodo();
-        statemsg(w0 + "完毕！", "ok");
-        clearStatemsgLater();
-      } else if(st.error){
-        statemsg(st.error, "warn");
-      }
-      setTimeout(loadFetchState, 2000);
-      return;
-    }
-    var b = st.batch || {}, items = b.items || [], word = (b.mode === "today") ? "刷新" : "取数";
-    if(b.running){
-      var cur = items.filter(function(i){ return i.state === "running"; })[0] ||
-                items.filter(function(i){ return i.state === "pending"; })[0];
-      statemsg("正在" + word + "（" + Math.min(items.length, (b.done || 0) + 1) + "/" + items.length +
-               (cur ? "：" + cur.label : "") + "）…");
-      setTimeout(function(){ pollFetch(keep, single); }, 400);   // 2026-09-24：1.2s → 0.4s，刷新完感知上少等最多 0.8s
-      return;
-    }
-    if($("refresh")) $("refresh").classList.remove("spin");
-    if($("fetchbtn")) $("fetchbtn").classList.remove("spin");
-    var bad = items.filter(function(i){ return i.state === "error"; });
-    var okN = items.filter(function(i){ return i.state === "ok"; }).length;
-    var skipL = items.filter(function(i){ return i.state === "skipped"; });
-    loadFromServer(keep);                      // 刷新时保住当前选中的时间段/口径
-    loadTodo();                                // 新数进来 → 待复盘角标跟着更新（服务端已作废那份缓存）
-    if(bad.length){
-      statemsg(word + "完毕：" + okN + " 个成功、" + bad.length + " 个失败（" +
-               bad.map(function(i){ return i.label; }).join("、") + "）：" +
-               (bad[0].error || ""), "warn");
-    } else {
-      statemsg(word + "完毕！" + (items.length > 1 ? ("（" + okN + " 个活动" +
-               (skipL.length ? "，跳过：" + skipL.map(function(i){ return i.label; }).join("、")
-                             : "") + "）") : ""), "ok");
-      clearStatemsgLater();
-    }
-    setTimeout(loadFetchState, 2000);
-  }).catch(function(){ setTimeout(function(){ pollFetch(keep, single); }, 1500); });
-}
-function startFetch(todayOnly){
-  var btn = todayOnly ? $("refresh") : $("fetchbtn"), keep = state ? currentView() : null;
-  if(todayOnly){
-    btn.classList.remove("spin");
-    void btn.offsetWidth;                     // 重启动画：箭头一直转，直到跑完
-    btn.classList.add("spin");
-    statemsg("正在刷新…");
-  } else {
-    btn.disabled = true;
-    btn.classList.add("spin");                 // 图标按钮：转起来就行，不写文字（写文字会把图标顶掉）
-    statemsg("正在取数…");
-  }
-  // 一次刷全部活动（2026-10-09 用户定）：`all=1` + 当前活动（服务端让它排头，先跑）
-  // 例外（2026-10-12 用户定）：收尾的活动不再混进整批——人在它的页面上点按钮就是
-  // "明确要它这一次"，所以只跑它自己（不加 all=1，服务端单活动入口不拦）。
-  var cur = null;
-  ACTS.forEach(function(a){ if(a.id === AID) cur = a; });
-  var batch = !(cur && cur.ended);
-  var req = [];
-  if(batch) req.push("all=1");
-  if(todayOnly) req.push("today=1");
-  fetch("api/fetch" + actQuery(req.join("&")), { method:"POST" }).then(function(r){
-    return r.json().then(function(j){ return { ok:r.ok, j:j }; });
-  }).then(function(res){
-    if(!res.ok){
-      btn.classList.remove("spin");
-      // 只有真像登录态问题才提 wait_login（2026-10-12）：别的错照原样报，别把人带去重登
-      var m = res.j.error || "取数没起来";
-      statemsg(m + (/登录|未授权|401|403/.test(m) ? "（登录态过期就跑 wait_login.py）" : ""), "warn");
+      pollFetch(keep, !batched);
+    }).catch(function (error) {
+      button.classList.remove("spin");
+      statemsg("请求失败：" + error.message, "warn");
       setTimeout(loadFetchState, 1500);
+    });
+  }
+
+  function openThresholdOverview() {
+    if (!BUCKETS.length) return;
+    clearTimeout(MODAL_TIMER);
+    $("mtitle").textContent = "当前批门槛";
+    $("mbody").innerHTML = thresholdOverviewMarkup();
+    document.querySelector(".modalbox").className = "modalbox thresholdmodal";
+    $("modal").classList.remove("closing");
+    $("modal").hidden = false;
+  }
+
+  function openBatchLaunchOverview(date) {
+    var event = batchLaunchEvents(filteredDays()).find(function (item) {
+      return item.date === date;
+    });
+    if (!event) return;
+    clearTimeout(MODAL_TIMER);
+    $("mtitle").textContent = full(date) + " · " + event.items.length + " 个批次上线";
+    $("mbody").innerHTML = '<div class="launchlist">' + event.items.map(function (item) {
+      return '<div class="launchitem"><b>' + esc(item.bucket) + '</b><span>' +
+        esc(item.label) + '</span></div>';
+    }).join("") + '</div>';
+    document.querySelector(".modalbox").className = "modalbox launchmodal";
+    $("modal").classList.remove("closing");
+    $("modal").hidden = false;
+  }
+
+  function closeModal() {
+    var modal = $("modal");
+    if (!modal || modal.hidden) return;
+    clearTimeout(MODAL_TIMER);
+    modal.classList.add("closing");
+    var delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 130;
+    MODAL_TIMER = setTimeout(function () {
+      modal.hidden = true;
+      modal.classList.remove("closing");
+    }, delay);
+  }
+
+  function freshTick() {
+    if (window.__DATA__ || !AID) return;
+    fetch("api/fetch/status" + actQuery(), { cache: "no-store" }).then(function (response) {
+      return response.json();
+    }).then(function (status) {
+      var key = [(status.db || {}).last, status.lastFetchTime,
+        (status.auto || {}).at, status.running].join("|");
+      var changed = FRESH_KEY && key !== FRESH_KEY;
+      FRESH_KEY = key;
+      if (changed && !status.running) {
+        loadFromServer(currentView());
+      }
+    }).catch(function () {});
+  }
+
+  document.addEventListener("click", function (event) {
+    var launchMarker = event.target.closest("[data-launch-date]");
+    if (launchMarker) {
+      openBatchLaunchOverview(launchMarker.dataset.launchDate);
       return;
     }
-    pollFetch(keep, !batch);  // 服务端是"起个后台任务就返回"，所以箭头由 pollFetch 在跑完后停
-  }).catch(function(e){
-    btn.classList.remove("spin");
-    statemsg("请求失败：" + e.message, "warn");
-    setTimeout(loadFetchState, 1500);
+    if (event.target.closest("#thresholdbtn")) {
+      openThresholdOverview();
+      return;
+    }
+    var activityToggle = event.target.closest("[data-activitytoggle]");
+    if (activityToggle) {
+      var activityMenu = $("activitymenu");
+      var activityOpen = activityMenu.hidden;
+      document.querySelectorAll(".selectmenu,.datepicker").forEach(function (item) {
+        if (item.classList.contains("datepicker") && DATE_PICKER) closeDatePicker(false);
+        else if (item.classList.contains("selectmenu")) item.hidden = true;
+      });
+      document.querySelectorAll("[data-buckettoggle]").forEach(function (item) {
+        item.setAttribute("aria-expanded", "false");
+      });
+      activityMenu.hidden = !activityOpen;
+      activityToggle.setAttribute("aria-expanded", activityOpen ? "true" : "false");
+      $("activitypicker").classList.toggle("open", activityOpen);
+      return;
+    }
+    var activityOption = event.target.closest("[data-activityvalue]");
+    if (activityOption) {
+      var nextActivity = activityOption.dataset.activityvalue;
+      closeActivityPicker(false);
+      switchActivity(nextActivity);
+      return;
+    }
+    if (!event.target.closest(".activitypicker")) closeActivityPicker(false);
+    var thresholdItem = event.target.closest("[data-thresholdbucket]");
+    if (thresholdItem) {
+      var thresholdBucket = thresholdItem.dataset.thresholdbucket;
+      closeModal();
+      state.bucket = thresholdBucket;
+      state.expandedDates = [];
+      renderAll(true);
+      setTimeout(function () {
+        if ($("thresholdbtn")) $("thresholdbtn").focus({ preventScroll: true });
+      }, 145);
+      return;
+    }
+    var dateToggle = event.target.closest("[data-datetoggle]");
+    if (dateToggle) {
+      if (DATE_PICKER) closeDatePicker(false);
+      else openDatePicker();
+      return;
+    }
+    var calendarNav = event.target.closest("[data-calnav]");
+    if (calendarNav && DATE_PICKER) {
+      DATE_PICKER.month = shiftMonth(DATE_PICKER.month, Number(calendarNav.dataset.calnav));
+      renderDatePicker();
+      return;
+    }
+    var calendarDay = event.target.closest("[data-calday]");
+    if (calendarDay && DATE_PICKER && !calendarDay.disabled) {
+      var picked = calendarDay.dataset.calday;
+      if (DATE_PICKER.stage === "end") {
+        DATE_PICKER.end = picked;
+        if (DATE_PICKER.end < DATE_PICKER.start) {
+          var swap = DATE_PICKER.start;
+          DATE_PICKER.start = DATE_PICKER.end;
+          DATE_PICKER.end = swap;
+        }
+        DATE_PICKER.stage = null;
+      } else {
+        DATE_PICKER.start = picked;
+        DATE_PICKER.end = picked;
+        DATE_PICKER.stage = "end";
+      }
+      renderDatePicker();
+      return;
+    }
+    var calendarAction = event.target.closest("[data-calaction]");
+    if (calendarAction && DATE_PICKER) {
+      var action = calendarAction.dataset.calaction;
+      if (action === "cancel") {
+        closeDatePicker(true);
+        return;
+      }
+      if (action === "today") {
+        var today = dateKey(new Date());
+        today = today < FIRST ? FIRST : (today > LAST ? LAST : today);
+        DATE_PICKER.start = today;
+        DATE_PICKER.end = today;
+      }
+      var range = {
+        start: DATE_PICKER.start,
+        end: DATE_PICKER.end
+      };
+      DATE_PICKER = null;
+      setDateRange(range.start, range.end);
+      return;
+    }
+    if (DATE_PICKER && !event.target.closest(".daterangepicker")) closeDatePicker(false);
+    var bucketToggle = event.target.closest("[data-buckettoggle]");
+    if (bucketToggle) {
+      var menu = bucketToggle.parentElement.querySelector(".selectmenu");
+      var open = menu.hidden;
+      document.querySelectorAll(".selectmenu").forEach(function (item) { item.hidden = true; });
+      menu.hidden = !open;
+      bucketToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      return;
+    }
+    var bucketOption = event.target.closest("[data-bucketvalue]");
+    if (bucketOption) {
+      state.bucket = bucketOption.dataset.bucketvalue;
+      state.expandedDates = [];
+      renderAll(true);
+      return;
+    }
+    if (!event.target.closest(".customselect")) {
+      document.querySelectorAll(".selectmenu").forEach(function (item) { item.hidden = true; });
+    }
+    var viewButton = event.target.closest("[data-view]");
+    if (viewButton) {
+      state.view = viewButton.dataset.view;
+      if (state.view === "batch" && state.bucket === "all" && BUCKETS.length) {
+        state.bucket = BUCKETS[0].id;
+      }
+      state.expandedDates = [];
+      renderAll(true);
+      return;
+    }
+    var analysisButton = event.target.closest("[data-analysismode]");
+    if (analysisButton) {
+      state.analysisMode = analysisButton.dataset.analysismode;
+      state.expandedDates = [];
+      syncViewControls();
+      renderChartArea(true);
+      $("tablearea").innerHTML = state.analysisMode === "detail"
+        ? (state.view === "date" ? dateTable() : batchTable()) : "";
+      return;
+    }
+    var sizeButton = event.target.closest("[data-size]");
+    if (sizeButton) {
+      state.size = Number(sizeButton.dataset.size);
+      state.end = LAST;
+      state.start = state.size === 0 ? FIRST : DAYS[Math.max(0, DAYS.length - state.size)].date;
+      state.expandedDates = [];
+      renderAll(true);
+      return;
+    }
+    var metricButton = event.target.closest("[data-metric]");
+    if (metricButton && !metricButton.disabled) {
+      state.metric = metricButton.dataset.metric;
+      updateChartContent();
+      return;
+    }
+    var dateChartButton = event.target.closest("[data-datechart]");
+    if (dateChartButton) {
+      state.dateChart = dateChartButton.dataset.datechart;
+      updateChartContent();
+      return;
+    }
+    var batchChartButton = event.target.closest("[data-batchchart]");
+    if (batchChartButton) {
+      state.batchChart = batchChartButton.dataset.batchchart;
+      updateChartContent();
+      return;
+    }
+    var dateRow = event.target.closest("[data-date]");
+    if (dateRow) {
+      openRowDetail(dateRow.dataset.date);
+      return;
+    }
   });
-}
-if(window.__DATA__){ boot(window.__DATA__); } else { loadActivities(); }
-if($("refresh")) $("refresh").onclick = function(){
-  if(window.__DATA__){                       // 单文件版没有服务：只能重读文件里那份数据
-    statemsg("刷新完毕！", "ok");
-    clearStatemsgLater();
-    loadFromServer(currentView());
-    return;
+
+  document.addEventListener("change", function (event) {
+    if (event.target.id === "actsel") {
+      switchActivity(event.target.value);
+    }
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+      if (DATE_PICKER) {
+        closeDatePicker(true);
+        return;
+      }
+      var activityMenu = $("activitymenu");
+      if (activityMenu && !activityMenu.hidden) {
+        closeActivityPicker(true);
+        return;
+      }
+      var openMenu = document.querySelector(".selectmenu:not([hidden])");
+      if (openMenu) {
+        var toggle = openMenu.parentElement.querySelector("[data-buckettoggle]");
+        openMenu.hidden = true;
+        if (toggle) {
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.focus();
+        }
+        return;
+      }
+      if (!$("modal").hidden) {
+        closeModal();
+        return;
+      }
+      if (state && state.expandedDates.length) {
+        closeRowDetail();
+        return;
+      }
+    }
+    if (event.key !== "Enter" && event.key !== " ") return;
+    var launchMarker = event.target.closest("[data-launch-date]");
+    if (launchMarker) {
+      event.preventDefault();
+      openBatchLaunchOverview(launchMarker.dataset.launchDate);
+      return;
+    }
+    var dateRow = event.target.closest("[data-date]");
+    if (dateRow) {
+      event.preventDefault();
+      openRowDetail(dateRow.dataset.date);
+    }
+  });
+
+  if ($("refresh")) $("refresh").onclick = function () {
+    if (window.__DATA__) {
+      statemsg("刷新完毕！", "ok");
+      clearStatemsgLater();
+      loadFromServer(currentView());
+      return;
+    }
+    startFetch(true);
+  };
+  if ($("fetchbtn")) $("fetchbtn").onclick = function () { startFetch(false); };
+  if ($("modalx")) $("modalx").onclick = closeModal;
+  if ($("modal")) $("modal").onclick = function (event) {
+    if (event.target === this) closeModal();
+  };
+
+  if (window.__DATA__) {
+    AID = window.__DATA__.activityId || "";
+    boot(window.__DATA__);
+    loadFetchState();
+  } else {
+    loadActivities();
   }
-  startFetch(true);                          // 刷新 = 拉今天的实时数（随时可点）
-};
-if($("fetchbtn")) $("fetchbtn").onclick = function(){ startFetch(false); };
-if($("todobtn")) $("todobtn").onclick = openTodo;
-if($("modalx")) $("modalx").onclick = closeIdea;
-if($("modal")) $("modal").onclick = function(ev){ if(ev.target === this) closeIdea(); };   // 点遮罩关掉
-document.addEventListener("keydown", function(ev){ if(ev.key === "Escape") closeIdea(); });
-loadFetchState();
-if(!window.__DATA__) setInterval(freshTick, 60000);   // 服务版：每 60 秒看看自动刷新有没有更新数据
+  loadFetchState();
+  if (!window.__DATA__) setInterval(freshTick, 60000);
+}());

@@ -81,8 +81,8 @@ class CheckBatchPlanTest(unittest.TestCase):
         import io
         import yaml
         repo = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-        for rel in (r"activities\火山引擎MediaKit\调整\2026-10-08-九批.yaml",
-                    r"activities\KIRO鬼点子计划\调整\2026-10-08-四批.yaml"):
+        for rel in (r"activities\火山引擎MediaKit\批次\2026-10-08-九批.yaml",
+                    r"activities\KIRO鬼点子计划\批次\2026-10-08-四批.yaml"):
             path = os.path.join(repo, rel)
             if not os.path.exists(path):
                 continue

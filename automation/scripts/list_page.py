@@ -256,10 +256,11 @@ class ListPage:
         返回表有没有出数据。`wait_ms` 是「没看到遮罩」时的固定底：读达标数字的页面要传大一点
         （如 2500），否则可能读到上一次查询的旧数——2026-09-21 踩过。
         """
-        ui.click_query(self.page,
-                       floor_ms=DEFAULT_QUERY_MS if wait_ms is None else wait_ms,
-                       timeout=T_QUERY, scope=self.scope)
-        return self.wait_rows() if wait_rows else True
+        landed = ui.click_query(
+            self.page,
+            floor_ms=DEFAULT_QUERY_MS if wait_ms is None else wait_ms,
+            timeout=T_QUERY, scope=self.scope)
+        return self.wait_rows() if wait_rows else landed
 
     def wait_rows(self, timeout=None):
         """等这一页的表出数据（条件等待；真的是空表就等满上限，返回 False）。
@@ -293,6 +294,11 @@ class ListPage:
     def text(self):
         """整页文字（体检核对名字在不在用）。"""
         return self.page.locator("body").inner_text()
+
+    def table_text(self):
+        """当前作用域内所有表格的文字签名（判断查询结果是否已重绘）。"""
+        tables = self.page.locator(_sel(self.scope, ".el-table"))
+        return "\n".join(tables.all_inner_texts())
 
     def _wait_row(self, name, match, timeout):
         """等某一行出现：等到就返回（行上带住名字），等不到返回 None。"""

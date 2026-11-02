@@ -52,12 +52,11 @@ class ParseTest(unittest.TestCase):
 
 
 class VerdictTest(unittest.TestCase):
-    def test_按当期口径_2万目标_1万底线(self):
+    def test_按当前口径_日均曝光1万达标(self):
         v = am.verdict
         self.assertEqual(v(25000), (am.OK, True))
         self.assertEqual(v(20000), (am.OK, True))
-        self.assertEqual(v(19999.99), (am.NEAR, False))
-        self.assertEqual(v(10000), (am.NEAR, False))
+        self.assertEqual(v(10000), (am.OK, True))
         self.assertEqual(v(9999), (am.LOW, False))
         self.assertEqual(v(None), (am.PENDING, None))
 

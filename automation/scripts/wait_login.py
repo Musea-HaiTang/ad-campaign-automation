@@ -24,57 +24,56 @@
 ⚠ 只读：只发只读探测（GET 接口 / 打开对话页），不点页面上任何按钮、不下载、不创建。
 ⚠ 窗口用**最大化**打开：固定视口（如 1680×1000）在比它小的屏幕上会把右侧挤出屏幕，
   用户就点不到登录入口了（2026-09-16 踩过）。
+⚠ 挂的是**公共浏览器**（2026-10-16 起）：不用再关看板——它自己会把公共浏览器切成"有窗口"
+  给你登录，看板取数下次自动挂回同一只（登录态是同一份 profile）。
 """
 import argparse
-import json
 import os
 import sys
 import time
+from urllib.parse import urlparse
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", r"D:\playwright-browsers")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PROFILE = os.path.join(REPO, ".browser-profile")
-API = "https://csdn-distadmin.csdn.net/admin"
-PROBE_PATH = "/export/tasks/meta"
-DEFAULT_URL = "https://mp-admin.csdn.net/silkroad-dist/#/exportManage/task/list"
+import browser_broker as broker  # noqa: E402
+import csdn_ui as ui  # noqa: E402
+
+DEFAULT_URL = "https://mp-admin.csdn.net/silkroad-dist/#/distribute/distApplyOrder/list"
 DATABI_URL = "https://data.csdn.net/chat"
 DATABI_COMPOSER = "div.chat-center-input textarea"
-HDR = {"Accept": "application/json"}
 
 
 def log(*a):
     print(*a, flush=True)
 
 
-def probe(api):
-    """广告后台：`GET /admin/export/tasks/meta` 返回 code=200 才算恢复。(ok, 说明)。"""
-    try:
-        r = api.get(API + PROBE_PATH, headers=HDR)
-        raw = r.body()
-        t = raw.decode("utf-8", errors="replace")
-        if "\ufffd" in t:
-            t = raw.decode("gb18030", errors="replace")
-        body = json.loads(t)
-        return body.get("code") == 200, "code=%s %s" % (body.get("code"), body.get("message"))
-    except Exception as e:
-        return False, "请求异常: %s" % str(e).splitlines()[0][:80]
+def probe_admin(page):
+    """广告后台：MPToken + MPUser + 当前用户名都到位才算登录成功。"""
+    info = ui.login_identity(page)
+    ok = bool(info["userName"] and info["hasToken"] and info["hasUser"])
+    return ok, "MPToken=%s | MPUser=%s | userName=%r" % (
+        info["hasToken"], info["hasUser"], info["userName"])
 
 
-def probe_databi(page):
+def probe_databi(page, navigate=True):
     """数据平台：打开对话页，被踢到 /login 或没有输入框 = 没恢复。(ok, 说明)。
 
-    探测走**另一个标签页**（`page`），不去动用户正在填的那个窗口。
+    独立 wait_login 用另一个标签页探测；doctor 直接检查用户正在操作的标签页，
+    这时传 navigate=False，避免反复刷新把正在填写的登录表单清空。
     """
     try:
-        page.goto(DATABI_URL, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(1200)
+        if navigate:
+            page.goto(DATABI_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(1200)
         url = page.url
         box = page.locator(DATABI_COMPOSER).count()
-        return ("/login" not in url) and box > 0, "url=%s 输入框=%s" % (url, box)
+        parsed = urlparse(url)
+        logged_in = parsed.hostname == "data.csdn.net" and "/login" not in parsed.path
+        if parsed.path.startswith("/chat"):
+            logged_in = logged_in and box > 0
+        return logged_in, "url=%s 输入框=%s" % (url, box)
     except Exception as e:
         return False, "请求异常: %s" % str(e).splitlines()[0][:80]
 
@@ -89,28 +88,28 @@ def main():
     url = args.url or (DEFAULT_URL if args.site == "admin" else DATABI_URL)
 
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=PROFILE, channel="msedge", headless=False,
-            no_viewport=True, args=["--start-maximized"],
-        )
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        # 挂到**公共浏览器**上（有窗口模式）：不用再关看板——它和看板取数共用同一只浏览器、
+        # 各开各的标签页（2026-10-16 用户定）。
+        broker.ensure("headed")
+        ctx = broker.connect(p)
+        page = ctx.new_page()
         page.set_default_timeout(15000)
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(2000)
 
-        probe_page = ctx.new_page() if args.site == "databi" else None
-        if probe_page:
-            probe_page.set_default_timeout(20000)
+        probe_page = ctx.new_page() if args.site == "databi" else page
+        probe_page.set_default_timeout(20000)
 
-        log("浏览器已打开（最大化）。请你在窗口里重新登录 %s。"
+        log("浏览器已打开（公共浏览器切到有窗口）。请你在窗口里重新登录 %s。"
             % ("CSDN 广告后台" if args.site == "admin" else "数据平台 data.csdn.net"))
-        log("我每 5 秒探一次登录态，恢复后自动关窗口。")
+        log("我每 5 秒探一次登录态，恢复后关掉我开的这两个标签页（公共浏览器留着）。")
         log("----")
 
         deadline = time.time() + args.minutes * 60
         ok, n = False, 0
         while time.time() < deadline:
-            ok, why = probe(ctx.request) if args.site == "admin" else probe_databi(probe_page)
+            ok, why = (probe_admin(page) if args.site == "admin"
+                       else probe_databi(probe_page))
             n += 1
             log("[%s] 第 %d 次探测：%s （%s）"
                 % (time.strftime("%H:%M:%S"), n, "✅ 已恢复" if ok else "还没恢复", why))
@@ -122,9 +121,11 @@ def main():
             time.sleep(5)
 
         try:
-            ctx.close()
+            page.close()
+            if probe_page:
+                probe_page.close()
         except Exception as e:
-            log("ctx.close:", e)
+            log("page.close:", e)
         log("RESULT: 登录态%s" % ("已恢复" if ok else "未恢复"))
         sys.exit(0 if ok else 1)
 

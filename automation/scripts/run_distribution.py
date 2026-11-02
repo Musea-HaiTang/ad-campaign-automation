@@ -20,8 +20,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bucket_runner  # noqa: E402
 import cli  # noqa: E402
 import csdn_ui as ui  # noqa: E402
+import execution_state as es  # noqa: E402
 import list_page  # noqa: E402
 import naming  # noqa: E402
+import remote_lookup  # noqa: E402
 from playwright.sync_api import expect  # noqa: E402
 
 START_URL = "https://mp-admin.csdn.net/silkroad-dist/#/distribute/resource/list?channelType=page"
@@ -46,38 +48,40 @@ RETRY_TOKENS = ("圈选用户中", "请稍候")
 ERROR_TOKENS = ("失败", "错误", "已存在", "不能", "异常")
 ATTEMPTS = 4
 WAIT_S = 30
-VERIFY_QUERY_MS = 2200      # --verify：点完「查询」至少等这么久再读（和体检 read_page 同一个底）
 
 
-def read_back_one(s, bucket_name):
+def read_back_one(s, task_name):
     """提交后回读：切到「分发名单」页签查一次，确认名单真的落了库（2026-09-22 加）。
 
     跟 `run_taskorder.verify_created()` 同一规矩（`automation/README.md`「写入后台必须回读核对」）：
     「点了确定 + 读到提示」不算建成。查不到就记 warn、下次重跑——账本里的 `submitted` 是**永远跳过**。
-    ⚠ 用「行里含桶名」而不是全等：分发名单名是 `桶名 · 主题`，桶名只是它前面那截。
+    只认完整名单名；桶名只是名单名前缀，单独匹配会命中旧名单。
     """
     page = s.page
     try:
-        ui.goto(page, START_URL)
-        lp = open_entry(page, tab_name="分发名单")
-        lp.filter({PH_LIST_FILTER: bucket_name})
-        lp.query(wait_ms=0, wait_rows=False)      # 下一句已经在等这一行
-        hit = lp.row_containing(bucket_name, timeout=8) is not None
-        ui.log("  回读核对: %s（分发名单页签）" % ("✓ 已出现该名单" if hit else "✗ 查不到该名单"))
-        return hit
+        lp = remote_lookup.open(
+            page, START_URL, menu="圈选用户", tab="分发名单",
+            filter_placeholder=PH_LIST_FILTER)
+        state = remote_lookup.exact(lp, task_name, PH_LIST_FILTER)
+        ui.log("  回读核对: %s（分发名单页签）" % (
+            "✓ 精确命中完整名单名" if state.is_found else
+            "✗ 已确认不存在完整名单名" if state.is_absent else
+            "? 未确认（%s）" % state.reason))
+        return state
     except Exception as e:
-        ui.log("  回读核对异常（按未通过处理）: %s" % str(e).splitlines()[0][:120])
-        return False
+        reason = str(e).splitlines()[0][:120]
+        ui.log("  回读核对异常（记未确认）: %s" % reason)
+        return es.unknown(reason)
 
 
-def check_confirm_name(box, bucket_name):
-    """保险丝：确认框里的名单名称必须含目标桶名，否则取消并报错（防点错行建错名单）。"""
+def check_confirm_name(box, list_name):
+    """保险丝：确认框里必须出现完整目标名单名，否则中止。"""
     txt = box.inner_text()
     flat = " / ".join(x.strip() for x in txt.splitlines() if x.strip())
-    if bucket_name not in txt:
-        raise RuntimeError("确认框名单名称与目标桶不符，已中止！\n  期望包含: %s\n  弹窗内容: %s"
-                           % (bucket_name, flat[:200]))
-    ui.log("  保险丝 OK：确认框名单名称含目标桶 %s" % bucket_name)
+    if list_name not in txt:
+        raise RuntimeError("确认框名单名称与目标不符，已中止！\n  期望包含: %s\n  弹窗内容: %s"
+                           % (list_name, flat[:200]))
+    ui.log("  保险丝 OK：确认框含完整名单名 %s" % list_name)
     return flat
 
 
@@ -89,18 +93,18 @@ def do_one(s, task_name, bucket_name, aid, shot_dir):
         # 每个桶都重新打开一次列表：状态干净，也不会因为上一步的滚动/刷新找不到行
         lp = open_entry(page)
         # 用列表自带的筛选框把目标记录筛成唯一一行，再点这一行的按钮
-        lp.filter({TAB_FILTER_PH["博文圈选任务"]: bucket_name})
+        lp.filter({TAB_FILTER_PH["博文圈选任务"]: task_name})
         lp.query(wait_ms=0, wait_rows=False)      # 下一句已经在等这一行
-        row = lp.row_containing(bucket_name, timeout=8)
+        row = lp.row_by_name(task_name, timeout=8)
         if row is None:
-            raise RuntimeError("筛选后列表里找不到这一行：%s" % bucket_name)
+            raise RuntimeError("筛选后列表里找不到这一行：%s" % task_name)
         if not row.button(BUTTON_TEXT):
             raise RuntimeError("这一行里找不到「%s」按钮" % BUTTON_TEXT)
         ui.log("  定位方式：筛选框过滤 + 这一行的按钮")
         # 2026-09-14 真机：点按钮弹的是 message-box（不是 el-dialog）
         box = page.locator(MSG_BOX).first
         expect(box).to_be_visible(timeout=10000)
-        flat = check_confirm_name(box, bucket_name)   # 保险丝：名单名称必须对得上
+        flat = check_confirm_name(box, task_name)
         ui.log("  确认框：%s" % flat[:300])
 
         if s.dry_run:
@@ -150,9 +154,10 @@ def do_one(s, task_name, bucket_name, aid, shot_dir):
     # 2026-09-22 加：提示干净也不算成功 —— **回读名单管理**确认真的落了库。
     # 原来只看 `.el-message` 文本：提示为空（什么都没读到）也记 submitted，
     # 而 submitted 在账本里是"永远跳过"，误记就等于这桶再也不建。
-    if not read_back_one(s, bucket_name):
-        ui.log("  ⚠ 提交后回读查不到该名单 → 记 warn（下次重跑；结尾 RESULT: HAS_WARN）")
-        return "warn"
+    state = read_back_one(s, task_name)
+    if not state.is_found:
+        ui.log("  ⚠ 提交后回读未确认该名单 → 下次先远端对账，不盲重建")
+        return bucket_runner.NEEDS_RECONCILE
     return "submitted"
 
 
@@ -170,21 +175,23 @@ def verify_lists(s, items, prefix=""):
     （2026-09-23 卡住过一次）；体检 `read_page()` 那套「筛前缀 + 给底 + 读正文」实测稳，这里跟它一致。
     """
     page = s.page
-    ui.goto(page, START_URL)
-    lp = open_entry(page, tab_name="分发名单")
-    if prefix:
-        lp.filter({PH_LIST_FILTER: prefix})
-    lp.query(wait_ms=VERIFY_QUERY_MS, wait_rows=False)
-    # 2026-09-22 踩到：这张表是**异步加载**（切页签后 ~3 秒才出数据，先显示"暂无数据"）——
-    # 不等它就会读到空表、把已建的名单全报成"未找到"（实测 5/5 全误报）
-    ready = lp.wait_rows(timeout=12)
-    ui.log("  分发名单表格就绪:%s（筛选前缀 %r）" % (ready, prefix or "不限"))
-    body = lp.text()
+    lp = remote_lookup.open(
+        page, START_URL, menu="圈选用户", tab="分发名单",
+        filter_placeholder=PH_LIST_FILTER)
+    names = {task_name: task_name for _a, task_name, _bucket_name in items}
+    states = (
+        remote_lookup.exact_many(lp, names, PH_LIST_FILTER, prefix)
+        if prefix else
+        {name: remote_lookup.exact(lp, name, PH_LIST_FILTER)
+         for name in names}
+    )
     ok = 0
     for a, task_name, bucket_name in items:
-        hit = bucket_name in body
-        ok += 1 if hit else 0
-        ui.log("  %s %s" % ("✓ 已建" if hit else "✗ 未找到", bucket_name))
+        state = states[task_name]
+        ok += 1 if state.is_found else 0
+        ui.log("  %s %s" % (
+            "✓ 已建" if state.is_found else
+            "✗ 未找到" if state.is_absent else "? 未确认", task_name))
     ui.log("名单管理核对：%d/%d 已建（筛选前缀 %r）" % (ok, len(items), prefix or "不限"))
 
 
@@ -204,12 +211,19 @@ def main():
                 ui.log("RESULT: OK")
                 sys.exit(0)
             ui.goto(s.page, START_URL)
+
             ctx.report = bucket_runner.run_buckets(
                 items,
                 lambda it: do_one(s, it[1], it[2], it[0]["id"], ctx.shot_dir),
                 key_of=lambda it: "%s|%s" % (camp["taskGroupName"], it[0]["id"]),
                 describe=lambda it: "[%s] %s" % (it[0]["id"], it[1]),
                 progress=ctx.progress,
+                reconcile=lambda it: read_back_one(s, it[1]),
+                payload_of=lambda it: {
+                    "taskGroup": camp["taskGroupName"],
+                    "bucket": it[0]["id"],
+                    "listName": it[1],
+                },
                 on_item_fail=lambda it: ui.dismiss_dialogs(s.page),
                 log=ui.log,
                 dry_run=not args.submit,

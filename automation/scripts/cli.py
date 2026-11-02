@@ -83,9 +83,14 @@ def progress_path(act_dir, name):
     return os.path.join(act_dir, "日志", name)
 
 
-def open_progress(act_dir, name, *, reset=False):
+def open_progress(act_dir, name, *, reset=False, strict=False):
     """开一个断点账本；账本名要按运行时算的命令（`run_audience --name-suffix`）用这个。"""
-    return bucket_runner.Progress(progress_path(act_dir, name), reset=reset)
+    try:
+        return bucket_runner.Progress(progress_path(act_dir, name),
+                                      reset=reset, strict=strict)
+    except ValueError as e:
+        print(str(e))
+        raise SystemExit(2)
 
 
 class Context:
@@ -123,7 +128,8 @@ def context(args, *, shots, progress=None):
     ctx = Context(cfg, act_dir, shot_dir, keep_buckets(cfg["audiences"], only), only)
     if progress:
         ctx.progress = open_progress(act_dir, progress,
-                                     reset=getattr(args, "reset_progress", False))
+                                     reset=getattr(args, "reset_progress", False),
+                                     strict=getattr(args, "submit", False))
     return ctx
 
 

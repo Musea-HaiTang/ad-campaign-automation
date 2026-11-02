@@ -15,6 +15,7 @@ REPO = ROOT.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import run_selection as rs  # noqa: E402
+import workspace_repo as repo  # noqa: E402
 
 
 class KeywordsTest(unittest.TestCase):
@@ -27,7 +28,9 @@ class KeywordsTest(unittest.TestCase):
         self.assertEqual(rs.keywords_of({"keywordGroup": {}}), [])
 
     def test_真实D桶词表是96个_回归锚点(self):
-        path = REPO / "activities/火山引擎MediaKit/调整/2026-09-17-D桶换词重投.yaml"
+        path = REPO / "activities/火山引擎MediaKit/配置/火山引擎MediaKit-hang.yaml"
+        if not path.exists():
+            self.skipTest("需要本地真实活动样本，发布包中不含")
         with open(path, encoding="utf-8") as fh:
             cfg = yaml.safe_load(fh)
         aud = [a for a in cfg["audiences"] if a["id"] == "D"][0]
@@ -60,19 +63,36 @@ class SummarizeTest(unittest.TestCase):
         txt = '"article_id","title","article_url","last_30_days_pv"\n1,"a","u",\n'
         self.assertEqual(rs.summarize(txt), (1, 0, 0.0))
 
-    def test_台账表头只写一次_每行一条记录(self):
-        d = ROOT / "_tmp" / "test_selection"
+    def test_圈选结果写入数据库且同一桶同一时刻幂等(self):
+        d = ROOT / "_tmp" / "test_selection_record"
         d.mkdir(parents=True, exist_ok=True)
-        p = d / "圈选记录.md"
-        try:
-            rs.append_record(str(p), "2026-09-21 16:44", "D", 96, 51677, 3400000, 65.8, "a.csv")
-            rs.append_record(str(p), "2026-09-22 10:00", "D", 96, 52000, 3500000, 67.3, "b.csv")
-            text = p.read_text(encoding="utf-8")
-            self.assertEqual(text.count("| 导出时间 |"), 1)
-            self.assertIn("| 2026-09-21 16:44 | D | 96 | 51,677 | 3,400,000 | 65.8 | a.csv |", text)
-            self.assertIn("b.csv", text)
-        finally:
-            p.unlink(missing_ok=True)
+        db = d / "data.db"
+        if db.exists():
+            db.unlink()
+        conn = repo.connect(str(db))
+        activity = repo.save_activity(conn, {
+            "activity_key": "demo", "display_name": "示例",
+            "brand": "示例", "owner": "hang", "name_prefix": "demo",
+            "task_group_name": "demo", "activity_link": "https://example.com",
+            "status": "active", "started_on": "2026-09-21", "ended_on": None,
+        })
+        repo.save_bucket(conn, activity["id"], {
+            "bucket_key": "D", "display_name": "D类",
+            "topic": "", "target": "", "keywords_text": "",
+            "default_threshold_exposure": 1000, "status": "active",
+        })
+        conn.close()
+        first = rs.record_selection("demo", "D", "2026-09-21 16:44",
+                                    96, 51677, 3400000, str(db))
+        again = rs.record_selection("demo", "D", "2026-09-21 16:44",
+                                    96, 51677, 3400000, str(db))
+        self.assertEqual(first["id"], again["id"])
+        conn = repo.connect(str(db))
+        rows = repo.list_selection_runs(conn, activity["id"])
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["keyword_count"], 96)
+        self.assertEqual(rows[0]["article_count"], 51677)
 
 
 class RetryFetchTest(unittest.TestCase):

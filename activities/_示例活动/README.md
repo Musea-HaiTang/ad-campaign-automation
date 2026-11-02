@@ -8,9 +8,6 @@
 | 文件 | 是什么 |
 |---|---|
 | `配置/示例活动-hang.yaml` | **首批**的整活动 YAML：2 个桶（A 3 条资源 / B 2 条资源）、每个桶的客群定义与 AB 组 |
-| `调整/2026-01-08-二批.yaml` | **第二批**：只有 A 桶（演示"桶独立"——A 跑到了二批，B 还停在首批） |
-| `配置/判定门槛.yaml` | 每个桶的曝光门槛 + 达标线（千三） |
-| `配置/复盘动作.yaml` | 人定的调整动作（空模板，带注释示例） |
 
 ## 怎么用它
 
@@ -18,14 +15,9 @@
 # 1) 离线自检：这批该建几条资源 / 工单（不连后台、不登录）
 .venv\Scripts\python.exe automation/scripts/check_batch_plan.py --config "activities/_示例活动/配置/示例活动-hang.yaml"
 
-# 2) 造假数据 → 把看板点亮（写到一个单独的库，不动真实台账库）
-.venv\Scripts\python.exe automation/scripts/seed_demo.py
-.venv\Scripts\python.exe web/app.py --db activities/_db/示例看板.db --port 8788
-#    然后浏览器打开 http://127.0.0.1:8788
+# 2) 跑测试验证数据库 v2、看板装配和判定
+.venv\Scripts\python.exe -m pytest -q automation/tests
 ```
-
-点亮之后你能看到完整界面：分桶统计（每个桶 = 它自己最新那个任务）、批次之间（最新 → 最老）、
-点行弹出的**三条文案对比**（A 桶过门槛 → 胜出特写；B 桶没到门槛 → 记分卡）。
 
 ## 照它写你自己的活动
 

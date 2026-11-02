@@ -45,21 +45,21 @@ class VerifyListsTest(unittest.TestCase):
             run_distribution.verify_lists(types.SimpleNamespace(page=page), items, prefix=prefix)
         return page, logs
 
-    def test_先按活动前缀筛选再读(self):
+    def test_按活动前缀批量筛后本地完整名称匹配(self):
         page, logs = self._run([(None, NAME_A, BUCKET_A)])
         self.assertEqual(page.values["input[placeholder='%s']" % PH_LIST_FILTER],
-                         "火山引擎MediaKit-hang", "不筛选就只能看到全系统列表的第 1 页")
+                         "火山引擎MediaKit-hang")
         self.assertGreaterEqual(page.query_clicks, 1, "填了筛选必须点查询，否则读到的还是旧列表")
-        self.assertTrue(any("筛选前缀" in x for x in logs), "日志要说清这次筛了什么")
+        self.assertTrue(any(NAME_A in x and "已建" in x for x in logs))
 
     def test_在列表里的报已建_不在的报未找到(self):
         _, logs = self._run([(None, NAME_A, BUCKET_A), (None, "别的名单", BUCKET_C)])
-        self.assertTrue(any(BUCKET_A in x and "已建" in x for x in logs))
-        self.assertTrue(any(BUCKET_C in x and "未找到" in x for x in logs))
+        self.assertTrue(any(NAME_A in x and "已建" in x for x in logs))
+        self.assertTrue(any("别的名单" in x and "未找到" in x for x in logs))
 
-    def test_没给前缀时照旧不筛(self):
+    def test_给了空前缀也仍按完整名单名筛(self):
         page, _ = self._run([(None, NAME_A, BUCKET_A)], prefix="")
-        self.assertEqual(page.values, {}, "没有前缀就不动筛选框")
+        self.assertEqual(page.values["input[placeholder='%s']" % PH_LIST_FILTER], NAME_A)
 
 
 if __name__ == "__main__":

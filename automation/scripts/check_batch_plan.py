@@ -10,7 +10,7 @@
      名字与槽位错位会让跨批对比看错对象。
 
 用法：
-    .venv\\Scripts\\python.exe -u automation/scripts/check_batch_plan.py --config activities/火山引擎MediaKit/调整/2026-10-08-九批.yaml
+    .venv\\Scripts\\python.exe -u automation/scripts/check_batch_plan.py --config "<当前执行 YAML>"
 退出码：0 = 全过；1 = 有错（错**全列出来**，不早退——一次看全比来回跑省事）。
 """
 import argparse
@@ -151,13 +151,13 @@ def check_doc(d, require_suffix=True):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True,
-                    help="批次 YAML（activities/{活动}/调整/*.yaml）或首投的整活动 YAML（配置/*.yaml）")
+                    help="当前执行 YAML（activities/{活动}/配置/*.yaml 或 批次/*.yaml）")
     args = ap.parse_args()
     with io.open(args.config, encoding="utf-8") as f:
         d = yaml.safe_load(f)
     # 首投的整活动 YAML 在 配置/ 下、名字本来就是新的 → 不要求 nameSuffix；
-    # 重投批次在 调整/ 下 → 必须带后缀（2026-10-08 踩过的重名问题）。
-    require_suffix = os.path.basename(os.path.dirname(os.path.abspath(args.config))) == "调整"
+    # 重投批次在 批次/ 下 → 必须带后缀（后台重名建不了）。
+    require_suffix = os.path.basename(os.path.dirname(os.path.abspath(args.config))) == "批次"
     if not require_suffix:
         print("  （整活动 YAML · 首投：不校验 nameSuffix）")
     ab_test = (d.get("taskOrder") or {}).get("abTest", True)

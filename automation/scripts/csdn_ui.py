@@ -7,6 +7,9 @@
 这里**只放与「这次要办什么」无关的动作**；办事顺序（先选业务线 → 再选渠道 → …）
 留在各脚本里。
 
+浏览器：所有脚本共用**一只公共浏览器**（`browser_broker`，CDP 挂上去、各开各的标签页），
+看板取数 / 建任务 / 重新登录互不挤（2026-10-16 用户定）。
+
 用法：
     with csdn_ui.session(headed=args.headed, dry_run=not args.submit,
                          shot_dir=SHOT_DIR) as s:
@@ -17,21 +20,25 @@
 彩排 / 正式的规矩也在这里：`dry_run=True` 才截图（截图是测试专用），
 动作本身不会因为你传错而误点「确定」——点不点由脚本的业务步骤决定。
 """
+import datetime
 import os
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
+import msvcrt
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", r"D:\playwright-browsers")
 
+import browser_broker as broker  # noqa: E402
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
-PROFILE = r"D:\Codex_WorkingSpace\ad_management\.browser-profile"
-VIEWPORT = {"width": 1680, "height": 1000}
+# 写后台的锁：真办事（--submit）时同一时刻只允许一个脚本（见 _write_lock）
+WRITE_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_tmp", "write.lock")
 DEFAULT_TIMEOUT_MS = 8000
+BROWSER_PROBE_TIMEOUT_MS = 4000
 POLL_SECONDS = 6.0
+_RUN_LOG_FH = None
 
 # ---------- 术语表：后台表单上的中文提示词（按 placeholder 定位比 CSS 稳） ----------
 PH_DEPT = "请选择事业部"
@@ -42,10 +49,10 @@ PH_SIGN = "请输入签呈号"
 PH_TASK_NAME = "请输入任务名称"
 PH_RESOURCE_NAME = "请输入资源名称"
 PH_RESOURCE_SEARCH = "请输入资源名称搜索"
-PH_AD_TITLE = "请输入广告标题"
-PH_AD_SUMMARY = "请输入广告摘要"
-PH_HIGHLIGHT_WORD = "请输入飘红词"          # 「是否飘红」= 是 时才填（2026-09-24 探针确认）
-PH_AD_LINK = "请输入点击链接"
+PH_AD_TITLE = "解析自动生成标题"
+PH_AD_SUMMARY = "解析自动生成描述"
+PH_AD_USERNAME = "解析自动生成用户名"
+PH_AD_LINK = "请输入URL解析"
 PH_KEYWORDS = "请输入关键词,按（中英文）逗号分割"
 PH_USER_NAME = "请输入用户名称"
 PH_TRANSFER_SEARCH = "请输入搜索内容"
@@ -66,7 +73,41 @@ SEL_DIALOG_CLOSE = ".el-dialog__headerbtn"
 
 
 def log(*a):
-    print(*a, flush=True)
+    line = " ".join(str(x) for x in a)
+    print(line, flush=True)
+    if _RUN_LOG_FH:
+        try:
+            _RUN_LOG_FH.write(line + "\n")
+            _RUN_LOG_FH.flush()
+        except OSError:
+            pass
+
+
+@contextmanager
+def run_log(shot_dir, script=""):
+    """本次执行的 stdout 同步落一份日志，返回日志路径。
+
+    日志放 `{活动}/日志/runs/`；没有活动目录时放 `automation/_tmp/runs/`。
+    页面卡死、自动恢复、RESULT 都在同一条时间线上，后续排查不用再靠人工回忆。
+    """
+    global _RUN_LOG_FH
+    base = os.path.dirname(os.path.abspath(shot_dir)) if shot_dir else os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "_tmp")
+    root = os.path.join(base, "runs")
+    ensure_dir(root)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    name = (script or os.path.splitext(os.path.basename(sys.argv[0]))[0] or "run").strip()
+    name = name.replace("/", "_").replace("\\", "_").replace(" ", "_")
+    path = os.path.join(root, "%s-%s-%d.log" % (stamp, name, os.getpid()))
+    _RUN_LOG_FH = open(path, "a", encoding="utf-8")
+    try:
+        log("运行日志:", path)
+        yield path
+    finally:
+        try:
+            _RUN_LOG_FH.close()
+        finally:
+            _RUN_LOG_FH = None
 
 
 def ensure_dir(path):
@@ -80,29 +121,195 @@ class Session:
     page: object
     dry_run: bool = True
     shot_dir: str = ""
+    playwright: object = None
+    headed: bool = False
+
+
+class BrowserUnresponsive(RuntimeError):
+    """CDP 端口通，但页面层已经不能执行新动作。"""
+
+
+def is_browser_failure(exc):
+    """异常是否属于「浏览器/导航失活」，而不是后台某个元素没等到。"""
+    if isinstance(exc, BrowserUnresponsive):
+        return True
+    text = str(exc).lower()
+    markers = (
+        "page.goto: timeout",
+        "page.set_content: timeout",
+        "target page, context or browser has been closed",
+        "browser has disconnected",
+        "browser has been closed",
+        "websocket error",
+        "connection closed",
+        "connect econnrefused",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _open_checked_page(pw, headed=False):
+    """新开一页并做页面级健康探针；CDP 能连不等于渲染进程能干活。"""
+    broker.ensure("headed" if headed else "headless")
+    page = None
+    try:
+        ctx = broker.connect(pw)
+        page = ctx.new_page()
+        page.set_default_timeout(DEFAULT_TIMEOUT_MS)
+        page.set_content("<html><title>broker-ok</title></html>",
+                         timeout=BROWSER_PROBE_TIMEOUT_MS)
+        return page
+    except Exception as e:
+        if page is not None:
+            try:
+                page.close()
+            except Exception:
+                pass
+        raise BrowserUnresponsive(
+            "公共浏览器页面无响应：%s" % str(e).strip().splitlines()[0][:160]) from e
+
+
+def open_healthy_page(pw, headed=False):
+    """打开健康页；页面层失活时重启公共浏览器，只重试一次。"""
+    try:
+        return _open_checked_page(pw, headed=headed)
+    except BrowserUnresponsive as e:
+        log("⚠ %s" % str(e).splitlines()[0])
+        log("公共浏览器页面层失活 → 重启一次")
+        broker.stop()
+        return _open_checked_page(pw, headed=headed)
+
+
+def recover(s):
+    """当前页或浏览器失去响应后重启公共浏览器，再换一张健康页。
+
+    目标页面导航已经超时的情况下，空白页探针通常仍能通过；只换页会继续撞同一段
+    卡死的渲染进程，因此浏览器失活的恢复动作直接重启 broker，只重试一次。
+    """
+    old = s.page
+    try:
+        old.close()
+    except Exception:
+        pass
+    log("公共浏览器 → 重启一次")
+    broker.stop()
+    s.page = open_healthy_page(s.playwright, headed=s.headed)
+    return s.page
+
+
+def retry_reset(s, exc, url):
+    """逐项重试前重置页面：浏览器失活就恢复，再回列表页。"""
+    if is_browser_failure(exc):
+        log("↻ 浏览器失活 → 恢复公共浏览器后重试")
+        recover(s)
+    goto(s.page, url)
+
+
+def retry_browser_action(s, action, what="页面动作"):
+    """循环外动作：只对浏览器失活重试一次；后台元素错误原样抛出。"""
+    try:
+        return action()
+    except Exception as e:
+        if not is_browser_failure(e):
+            raise
+        log("⚠ %s遇到浏览器失活：%s" % (what, str(e).splitlines()[0][:160]))
+        recover(s)
+        return action()
 
 
 @contextmanager
-def session(*, headed=False, dry_run=True, shot_dir="", viewport=None):
-    """起一个带登录态的浏览器；退出时自动关掉。"""
-    viewport = viewport or VIEWPORT
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=PROFILE,
-            channel="msedge",
-            headless=not headed,
-            viewport=viewport,
-        )
+def _write_lock():
+    """真办事时的一把锁：同一时刻只允许一个脚本往后台建东西。
+
+    两个脚本一起点后台、"到底谁把这条建重了"根本查不出来——直接拦下来说清楚。
+    Windows 的字节区间锁：进程一死锁自动放掉，不会留下"过期锁"要人手工清。
+    """
+    path = os.path.abspath(WRITE_LOCK)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fh = open(path, "a+", encoding="utf-8")
+    try:
         try:
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            page.set_default_timeout(DEFAULT_TIMEOUT_MS)
-            yield Session(page, dry_run, shot_dir)
-        finally:
-            # 必须在 playwright 还活着的时候关，否则报 "Event loop is closed"
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            fh.close()
+            raise RuntimeError("已有另一个脚本在往后台建东西——同一时刻只允许一个（等它跑完再跑）")
+        yield
+    finally:
+        try:
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        except Exception:
+            pass
+        try:
+            fh.close()
+        except Exception:
+            pass
+
+
+@contextmanager
+def session(*, headed=False, dry_run=True, shot_dir=""):
+    """挂到公共浏览器上开**自己的标签页**；退出时只关这个标签页。
+
+    公共浏览器（`browser_broker`）是一只独立进程：看板取数、建任务、wait_login 同时挂上去、
+    各开各的标签页——不会再出现"开建任务的浏览器就把看板挤掉"（2026-10-16 用户定）。
+    真办事（`dry_run=False`，即 `--submit`）时再拿一把写锁，同一时刻只允许一个脚本动后台。
+    """
+    with run_log(shot_dir):
+        with sync_playwright() as p:
+            page = open_healthy_page(p, headed=headed)
+            s = Session(page, dry_run, shot_dir, playwright=p, headed=headed)
             try:
-                ctx.close()
-            except Exception as e:
-                log("ctx.close:", e)
+                with (nullcontext() if dry_run else _write_lock()):
+                    yield s
+            finally:
+                # 只关自己这一页；ctx 是**公共的**，绝不能 ctx.close()（那是把整只浏览器关了）
+                try:
+                    s.page.close()
+                except Exception as e:
+                    log("page.close:", e)
+
+
+LOGIN_IDENTITY_JS = r"""
+() => {
+  const cookieNames = document.cookie.split(";").map(x => x.trim().split("=")[0]);
+  let vue = document.querySelector("#app") && document.querySelector("#app").__vue__;
+  while (vue && !(vue.$store && vue.$store.getters)) vue = vue.$parent;
+  return {
+    userName: String((vue && vue.$store && vue.$store.getters.userName) || "").trim(),
+    hasToken: cookieNames.includes("MPToken"),
+    hasUser: cookieNames.includes("MPUser"),
+    url: location.href,
+  };
+}
+"""
+
+
+def login_identity(page):
+    """只读读取当前后台登录身份；不返回 token / cookie 值。"""
+    try:
+        data = page.evaluate(LOGIN_IDENTITY_JS)
+    except Exception:
+        return {"userName": "", "hasToken": False, "hasUser": False, "url": ""}
+    return data if isinstance(data, dict) else {
+        "userName": "", "hasToken": False, "hasUser": False, "url": ""
+    }
+
+
+def require_login_identity(page, timeout=15.0):
+    """创建资源/工单前的硬闸：必须拿到非空用户名和 MPToken/MPUser。"""
+    deadline = time.time() + timeout
+    info = login_identity(page)
+    while time.time() < deadline:
+        if info["userName"] and info["hasToken"] and info["hasUser"]:
+            log("登录身份 OK | 当前用户:%s" % info["userName"])
+            return info["userName"]
+        page.wait_for_timeout(250)
+        info = login_identity(page)
+    raise RuntimeError(
+        "登录身份不完整：MPToken=%s | MPUser=%s | userName=%r。"
+        "请先运行 automation/scripts/wait_login.py 重新登录，"
+        "否则后台会把申请人写成空值。"
+        % (info["hasToken"], info["hasUser"], info["userName"])
+    )
 
 
 def goto(page, url):

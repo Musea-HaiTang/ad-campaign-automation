@@ -9,16 +9,13 @@
     .venv\\Scripts\\python.exe -m unittest discover -s automation/tests -v
 """
 import pathlib
-import shutil
 import sys
-import types
 import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]   # automation/
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import campaign  # noqa: E402
 import run_audience  # noqa: E402
 
 
@@ -131,51 +128,6 @@ class SubmitGateTest(unittest.TestCase):
         cd = _Confirm()
         self.assertTrue(run_audience.submit_or_cancel(_Session(dry_run=True), cd, ok=False))
         self.assertEqual(cd.clicks, ["取消"])
-
-
-class ThresholdWriteTest(unittest.TestCase):
-    """写回 thresholds.yaml：两条路径（`--tune` 整批 / 自动调落点单条）走同一个入口，且是盖格子。
-
-    2026-09-23 收口：原先 `--tune` 是**整批覆盖**（这次没跑到的桶记录会被抹掉），
-    自动调落点那条路自己拼一份记录、取值用 `r.click`，两条路各写一遍栏位。
-    """
-
-    def setUp(self):
-        # 用仓库内的 _tmp（已 gitignore）：配置只用它的"路径"，阈值文件写在同目录
-        self.base = ROOT / "_tmp" / "test_run_audience" / self._testMethodName
-        self.base.mkdir(parents=True, exist_ok=True)
-        self.cfg = self.base / "a.yaml"
-        self.cfg.write_text("{}", encoding="utf-8")
-
-    def tearDown(self):
-        shutil.rmtree(self.base, ignore_errors=True)
-
-    def _load(self):
-        return campaign.load_thresholds(str(self.cfg))
-
-    def test_两条路径写出的记录逐字段相同(self):
-        obj = types.SimpleNamespace(click=3, exposure=1, count=262923, status="ok", base=13869)
-        run_audience.save_thresholds(str(self.cfg), {"A": obj})          # 自动调落点那条路
-        run_audience.save_thresholds(str(self.cfg), {"B": {"click": 3, "exposure": 1,
-                                                           "count": 262923, "status": "ok",
-                                                           "base": 13869}})   # --tune 那条路
-        m = self._load()
-        self.assertEqual(m["A"], m["B"], "同一份落点，两条路径写出来必须一模一样")
-        self.assertEqual(m["A"]["count"], 262923)
-
-    def test_盖格子_别的桶的记录保留(self):
-        run_audience.save_thresholds(str(self.cfg), {"A": {"click": 1, "exposure": 1, "count": 10,
-                                                           "status": "ok", "base": 10}})
-        run_audience.save_thresholds(str(self.cfg), {"B": {"click": 2, "exposure": 1, "count": 20,
-                                                           "status": "ok", "base": 20}})
-        self.assertEqual(sorted(self._load()), ["A", "B"], "写 B 不能把 A 抹掉")
-
-    def test_同一桶再写_新值生效(self):
-        run_audience.save_thresholds(str(self.cfg), {"A": {"click": 1, "exposure": 1, "count": 10,
-                                                           "status": "ok", "base": 10}})
-        run_audience.save_thresholds(str(self.cfg), {"A": {"click": 5, "exposure": 1, "count": 999,
-                                                           "status": "ok", "base": 10}})
-        self.assertEqual(self._load()["A"]["click"], 5)
 
 
 if __name__ == "__main__":

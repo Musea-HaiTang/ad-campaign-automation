@@ -3,7 +3,7 @@
 
 读一份整活动 YAML，打开「创建工单」表单，按 `taskOrder` 段填：业务线 / 子业务线 /
 任务组 / 任务名称 / 渠道(穿梭框) / AB测试(对照组·实验组1·实验组2 + 流量占比) /
-投放类型(CPM) / 计费价格 / 投放日期(设置时间) / 分发方式(分发名单→用户名单) / 曝光上限，
+投放类型(流量策略) / 计费价格 / 投放日期(设置时间) / 分发方式(分发名单→用户名单) / 曝光上限，
 并逐字段校验+截图。
 
 默认彩排：只填+校验+截图，点「取消」关闭弹窗，不点「创建」不创建。
@@ -28,10 +28,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bucket_runner  # noqa: E402
 import cli  # noqa: E402
 import csdn_ui as ui  # noqa: E402
+import execution_state as es  # noqa: E402
 import naming  # noqa: E402
+import remote_lookup  # noqa: E402
+import workspace_sync  # noqa: E402
+import workspace_repo  # noqa: E402
 from playwright.sync_api import expect  # noqa: E402
 
 LIST_URL = "https://mp-admin.csdn.net/silkroad-dist/#/distribute/distApplyOrder/list"
+RESOURCE_STYLE = "标题+描述"
+PH_ORDER_FILTER = "请输入任务名称模糊查询"
+
+
+def pre_submit_error(steps):
+    """兼容调用点：统一复用执行层的提交前重试异常。"""
+    return bucket_runner.pre_submit_error(steps)
 
 
 # ---------- 表单字段（按 placeholder 定位） ----------
@@ -79,6 +90,30 @@ def open_dialog(page):
     return form
 
 
+def progress_key(cfg, aud):
+    """账本键 = 本批完整工单名；不同批次天然不同，不再靠人工清账本。"""
+    return naming.order_task_name(cfg["campaign"], aud) or (
+        "%s|%s" % (cfg["campaign"]["taskGroupName"], aud["id"]))
+
+
+def payload_for(cfg, aud):
+    """只把真正进入工单表单的字段纳入指纹。"""
+    t = cfg["taskOrder"]
+    return {
+        "taskName": progress_key(cfg, aud),
+        "subBusinessLine": aud["subBusinessLine"],
+        "abTest": t.get("abTest", True),
+        "abGroups": aud.get("abGroups") or t.get("abGroups") or [],
+        "distributionList": aud.get("distributionList") or t.get("distributionList") or "",
+        "businessLine": t["businessLine"],
+        "taskGroup": t["taskGroup"],
+        "channel": t["channel"],
+        "price": t["price"],
+        "deliveryDate": t["deliveryDate"],
+        "exposureCaps": t["exposureCaps"],
+    }
+
+
 # ---------- AB 测试 ----------
 def click_radio_in_item(item, text):
     r = item.locator(".el-radio").filter(has_text=text).first
@@ -106,6 +141,19 @@ def disable_ab_test(form):
     ui.log("  AB测试: 否（单资源）")
 
 
+def set_resource_style(s, scope):
+    """资源挂载后选择固定样式「标题+描述」并回读。"""
+    sel = scope.locator("input[placeholder='请选择资源样式']:visible").first
+    expect(sel).to_be_visible(timeout=8000)
+    sel.click()
+    s.page.wait_for_selector(ui.SEL_DROPDOWN, timeout=8000)
+    ui.pick_option(s, RESOURCE_STYLE)
+    actual = sel.input_value()
+    if actual.strip() != RESOURCE_STYLE:
+        raise RuntimeError("资源样式回读不一致：期望 %r 实际 %r" % (RESOURCE_STYLE, actual))
+    ui.log("  [资源样式] %s ✓" % RESOURCE_STYLE)
+
+
 def set_single_resource(s, form, resource_name):
     """AB测试=否 时的「资源」下拉：搜一条 → 选 → 回读。没有流量占比。"""
     page = s.page
@@ -129,6 +177,7 @@ def set_single_resource(s, form, resource_name):
     if got.strip() != resource_name.strip():
         raise RuntimeError("单资源回读不一致：期望 %r 实际 %r" % (resource_name, got))
     ui.log("  [资源] %s ✓" % resource_name)
+    set_resource_style(s, form)
 
 
 def pick_ab_resource(s, form, group_label, resource_name, weight):
@@ -166,6 +215,7 @@ def pick_ab_resource(s, form, group_label, resource_name, weight):
     page.wait_for_timeout(500)      # 等远程查询返回（2026-09-22 实测：降到 150ms 反而出现 5.7s 的轮询空转，保留原值）
     ui.pick_option(s, resource_name)   # 2026-09-22 试过 interval=0.1：多读 27 次快照、平均反而变慢 → 保留默认 0.3 s
     ui.log("  [%s] 资源: %s ✓" % (group_label, resource_name))
+    set_resource_style(s, dlg)
     # 流量占比
     wbox = dlg.locator("input[placeholder='%s']" % ui.PH_WEIGHT).first
     if wbox.count():
@@ -478,34 +528,93 @@ def close_dialog(page, form):
         page.keyboard.press("Escape")
 
 
-def verify_created(page, task_name, tail_len=6):
+def _task_api_state(page, task_name):
+    """接口按完整任务名查一次；滞后时由调用方与页面结果合并。"""
+    try:
+        body = page.context.request.get(
+            "https://csdn-distadmin.csdn.net/admin/tTaskInfo/list",
+            params={
+                "taskName": task_name,
+                "needPage": 1,
+                "pageNumber": 1,
+                "pageSize": 30,
+                "channelType": 0,
+            },
+            headers={"Accept": "application/json"},
+        ).json()
+    except Exception as e:
+        return es.unknown("工单接口查询失败：%s" % str(e).splitlines()[0][:100])
+    for row in ((body.get("data") or {}).get("list") or []):
+        if (row.get("taskName") or "").strip() == task_name:
+            return es.found(
+                row.get("id") or row.get("taskId") or "",
+                reason="接口精确名称命中",
+                createBy=(row.get("createBy") or "").strip(),
+            )
+    return es.absent("接口查询成功，无精确任务名")
+
+
+def task_create_by(page, task_name):
+    """从任务列表接口读取完整任务名对应的 createBy；查不到返回 None。"""
+    state = _task_api_state(page, task_name)
+    return state.metadata.get("createBy") if state.is_found else None
+
+
+def lookup_task(page, task_name):
+    """中断对账合并页面与接口：任一确认存在即 FOUND，两边都确认无才 ABSENT。"""
+    try:
+        lp = remote_lookup.open(page, LIST_URL, filter_placeholder=PH_ORDER_FILTER)
+        ui_state = remote_lookup.exact(lp, task_name, PH_ORDER_FILTER)
+    except Exception as e:
+        ui_state = es.unknown(str(e).splitlines()[0][:100])
+    api_state = _task_api_state(page, task_name)
+    if ui_state.is_found:
+        return es.found(
+            ui_state.object_id or api_state.object_id,
+            reason="页面/接口确认存在",
+            createBy=api_state.metadata.get("createBy", ""),
+        )
+    if api_state.is_found:
+        return api_state
+    if ui_state.is_absent and api_state.is_absent:
+        return es.absent("页面和接口都确认不存在")
+    return es.unknown("页面=%s；接口=%s" % (ui_state.reason, api_state.reason))
+
+
+def verify_created(page, task_name, expected_user=""):
     """提交后**回读工单列表**核对任务名是否真的存在（防"假成功"，同 run_audience 的修法）。
 
     2026-09-14：老实现点完『创建』只等弹窗关闭 + 读提示文字，后台没落库也会记 submitted。
     ⚠ **2026-09-24 修假通过**：老实现只搜「桶名」（如 `火山引擎MediaKit-hang-A类`）——老工单名字里就含
-    这个串，新工单**没建成也会打 ✓**（当天真踩到）。现在要求**完整任务名**命中；
-    名字被表格截断时退一步认「任务名末 6 个字符」（如 `工具-6`），两个都找不到才算失败。
+    这个串，新工单**没建成也会打 ✓**（当天真踩到）。现在只认**完整任务名精确行**；
+    整页包含或尾号匹配都不能作为成功依据。
     ⚠ 别拿后台 `taskPageList` 接口来核这一步：**它滞后**（新建工单要等生效才进列表），
     用它会得到假阴性 → 下次重跑就建重复工单。界面列表才是这一步的准。
     """
-    tail = (task_name or "")[-tail_len:]
     try:
-        page.wait_for_timeout(1500)
-        text = page.locator("body").inner_text()
-        if task_name in text or tail in text:
-            ui.log("  回读核对: ✓ 列表里已出现该工单（%s）"
-                   % ("完整名" if task_name in text else "名尾 %r" % tail))
-            return True
-        ui.goto(page, LIST_URL)          # 列表可能没自动刷新，重进一次再找
-        page.wait_for_timeout(2500)
-        text = page.locator("body").inner_text()
-        hit = task_name in text or tail in text
-        ui.log("  回读核对: %s" % ("✓ 重进列表后找到" if hit else
-                                 "✗ 没找到完整名 %r（也没有名尾 %r）" % (task_name, tail)))
-        return hit
+        lp = remote_lookup.open(page, LIST_URL, filter_placeholder=PH_ORDER_FILTER)
+        state = remote_lookup.exact(lp, task_name, PH_ORDER_FILTER)
+        if state.is_found:
+            ui.log("  回读核对: ✓ 精确命中完整任务名")
+            if expected_user:
+                actual = task_create_by(page, task_name)
+                if actual is None:
+                    page.creator_mismatch = True
+                    ui.log("  ⚠ 申请人回读未确认（按告警处理）")
+                elif actual == expected_user:
+                    ui.log("  ✓ 申请人 | %s" % actual)
+                else:
+                    page.creator_mismatch = True
+                    ui.log("  ✗ 申请人 | 期望:%r | 实际:%r" % (expected_user, actual))
+        elif state.is_absent:
+            ui.log("  回读核对: ✗ 列表中确认没有完整任务名")
+        else:
+            ui.log("  回读核对: ? 未确认（%s）" % state.reason)
+        return state
     except Exception as e:
-        ui.log("  回读核对异常（按未通过处理）: %s" % e)
-        return False
+        reason = str(e).splitlines()[0][:120]
+        ui.log("  回读核对异常（记未确认）: %s" % reason)
+        return es.unknown(reason)
 
 
 def run_bucket(s, cfg, aud):
@@ -515,7 +624,7 @@ def run_bucket(s, cfg, aud):
     sub_line = aud["subBusinessLine"]
     aid = aud["id"]
     # 工单任务名：与圈选任务名是同一个字符串（命名规则见 naming.py）；规则算不出来才回退 YAML
-    task_name = naming.order_task_name(cfg["campaign"], aud) or t.get("taskName", "")
+    task_name = progress_key(cfg, aud) or t.get("taskName", "")
     # AB 三组资源：**优先用本桶自己的**（audiences[].abGroups，每桶挂自己那 3 份）；
     # 本桶没写才回落到 taskOrder.abGroups（全活动共用一组资源）。
     groups = aud.get("abGroups") or t.get("abGroups") or []
@@ -529,6 +638,7 @@ def run_bucket(s, cfg, aud):
     steps = []
 
     ui.log("[%s] %s" % (aid, task_name))
+    s.submitted = False      # 重试闸门：点过「提交」之后不许重试（防重复创建）
     name_warning = naming.name_warning(cfg["campaign"], aud)
     if name_warning:
         ui.log("  %s" % name_warning)
@@ -568,9 +678,9 @@ def run_bucket(s, cfg, aud):
         one = (groups[0].get("resource") if groups else "")
         step("资源", lambda: set_single_resource(s, form, one))
 
-    # 7) 投放类型 = CPM
+    # 7) 投放类型 = 流量策略（当前渠道只开放此项；等级规则由后台带默认值）
     step("投放类型",
-         lambda: click_radio_in_item(form.locator(".el-form-item").filter(has_text="投放类型").first, "CPM"))
+         lambda: click_radio_in_item(form.locator(".el-form-item").filter(has_text="投放类型").first, "流量策略"))
     # 8) 计费价格
     step("计费价格", lambda: set_input(form, ui.PH_PRICE, t["price"], "计费价格"))
     # 9) 投放日期（设置时间）
@@ -601,9 +711,9 @@ def run_bucket(s, cfg, aud):
     # 建出一条**缺字段的工单**，而事后的 verify_created() 只查"工单名在不在列表里"，查不出字段缺失。
     if bucket_runner.steps_status(steps) == bucket_runner.WARN:
         bad = "、".join(n for n, r in steps if r != "ok")
-        ui.log("  !! 有步骤未通过（%s）→ **不提交**，记 warn（下次重跑这一桶）" % bad)
+        ui.log("  !! 有步骤未通过（%s）→ **不提交**，关闭表单后整桶重试" % bad)
         close_dialog(page, form)
-        return bucket_runner.WARN
+        raise bucket_runner.pre_submit_error(steps)
 
     # 2026-09-14 真机勘察：表单底部的主按钮文案是「提交」（不是「创建」；「创建」是列表页开弹窗那个）
     btn = form.locator("button.el-button--primary:visible").filter(has_text="提交").last
@@ -611,6 +721,7 @@ def run_bucket(s, cfg, aud):
         ui.log("  !! 未找到『提交』按钮 → 记 warn（下次重跑，别当成功）")
         return "warn"
     try:
+        s.submitted = True   # 就这一下之后失败不能再重试
         btn.click(timeout=1500)
     except Exception:
         ui.close_dropdown(page)     # 用户名单下拉还开着、挡住按钮时先收起再点
@@ -624,9 +735,13 @@ def run_bucket(s, cfg, aud):
     msgs = page.locator(".el-message").all_inner_texts()
     ui.log("  已提交任务工单 | 提示:%s" % msgs)
     # 必须回读后台确认（同圈选步骤 2026-09-14 的修法），别把"点了创建"当"建成了"
-    if not verify_created(page, task_name):
-        ui.log("  ⚠ 提交后回读查不到该工单 → 记 warn（下次重跑这一桶）")
-        return "warn"
+    state = verify_created(page, task_name,
+                           expected_user=getattr(s, "login_user", ""))
+    if not state.is_found:
+        ui.log("  ⚠ 提交后回读未确认该工单 → 下次先远端对账，不盲重建")
+        return bucket_runner.NEEDS_RECONCILE
+    if getattr(page, "creator_mismatch", False):
+        s.creator_mismatch = True
     return "submitted"   # 真创建了 → 账本记 submitted，再跑时永远跳过
 
 
@@ -634,6 +749,7 @@ def main():
     ap = cli.parser("真正点『创建』建任务工单（默认彩排）", only=True)
     ap.add_argument("--start", default="", help="覆盖 config 的投放起始日 YYYY-MM-DD（同一批的桶隔天补建时用）")
     ap.add_argument("--end", default="", help="覆盖 config 的投放结束日 YYYY-MM-DD")
+    ap.add_argument("--v2-db", default=workspace_repo.V2_DB, help="数据库 v2 路径")
     args = ap.parse_args()
 
     ctx = cli.context(args, shots="taskorder_shots", progress="taskorder_progress.json")
@@ -656,16 +772,39 @@ def main():
 
     try:
         with ctx.session(args) as s:
+            ui.goto(s.page, LIST_URL)
+            s.login_user = ui.require_login_identity(s.page)
+
             ctx.report = bucket_runner.run_buckets(
                 ctx.auds,
                 lambda aud: run_bucket(s, ctx.cfg, aud),
-                key_of=lambda aud: "%s|%s" % (t["taskGroup"], aud["id"]),
+                key_of=lambda aud: progress_key(ctx.cfg, aud),
                 describe=lambda aud: "[%s] %s" % (aud["id"], t["taskGroup"]),
                 progress=ctx.progress,
+                reconcile=lambda aud: lookup_task(
+                    s.page, progress_key(ctx.cfg, aud)),
+                payload_of=lambda aud: payload_for(ctx.cfg, aud),
                 on_item_fail=lambda aud: ui.dismiss_dialogs(s.page),  # 关残留弹窗，别影响下一桶
+                on_retry=lambda aud, e: ui.retry_reset(s, e, LIST_URL),
+                retry=1,
+                should_retry=lambda aud, e: not getattr(s, "submitted", False),
                 log=ui.log,
                 dry_run=not args.submit,
                 unit="桶", rest="桶")
+            if getattr(s, "creator_mismatch", False):
+                ctx.report.warned += 1
+        if args.v2_db:
+            submitted = [
+                aud for aud in ctx.auds
+                if ctx.progress.get(progress_key(ctx.cfg, aud)) == bucket_runner.SUBMITTED
+            ]
+            if submitted:
+                started_on = args.start or t["deliveryDate"]["start"]
+                workspace_sync.sync_config_batch(
+                    args.v2_db, ctx.cfg, submitted, started_on,
+                    change_reason=os.path.basename(args.config),
+                    status="running",
+                )
     except Exception as e:
         cli.fatal(ctx, e)
     cli.finish(ctx.report)

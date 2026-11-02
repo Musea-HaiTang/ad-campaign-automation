@@ -1,10 +1,9 @@
-# ad_management 运行/测试依赖（venv 见 automation/AGENTS.md「环境」条）
-# 安装：.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Runtime and test dependencies.
+# Install with: .venv\Scripts\python.exe -m pip install -r requirements.txt
 
 pyyaml>=6.0
 
-# playwright 必须锁版本：它按版本号找浏览器目录（D:\playwright-browsers\chromium-<rev>），
-# 版本一变就会去找没下载过的浏览器修订号。==1.61.0 对应已下载的 chromium-1228。
+# Keep Playwright pinned so all operators use the same automation runtime.
 playwright==1.61.0
 
 pytest>=8.0

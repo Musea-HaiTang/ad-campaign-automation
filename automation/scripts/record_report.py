@@ -25,12 +25,12 @@ import sys
 import time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", r"D:\playwright-browsers")
 
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+import browser_broker as broker  # noqa: E402
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PROFILE = os.path.join(REPO, ".browser-profile")
 TMP_DIR = os.path.join(REPO, "automation", "_tmp")
 DEFAULT_START = "https://mp-admin.csdn.net/silkroad-dist/#/"
 SKIP_EXT = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
@@ -172,14 +172,12 @@ def main():
             log("  (响应记录跳过:", e, ")")
 
     ctx = None
+    page = None
     try:
         with sync_playwright() as p:
-            ctx = p.chromium.launch_persistent_context(
-                user_data_dir=PROFILE,
-                channel="msedge",
-                headless=False,
-                viewport={"width": 1680, "height": 1000},
-            )
+            # 挂公共浏览器（有窗口）——不再自己起一只抢 profile（2026-10-16 用户定）
+            broker.ensure("headed")
+            ctx = broker.connect(p)
             ctx.add_init_script(INIT_JS)
             ctx.on("response", on_response)
             for pg in list(ctx.pages):
@@ -188,7 +186,7 @@ def main():
                 except Exception:
                     pass
 
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page = ctx.new_page()
             page.set_default_timeout(8000)
             page.goto(args.start_url, wait_until="domcontentloaded", timeout=25000)
             page.wait_for_timeout(1500)
@@ -245,11 +243,11 @@ def main():
             (stats.get("click", 0), stats.get("input", 0) + stats.get("change", 0),
              stats.get("nav", 0), stats.get("xhr", 0)))
         log("输出:%s" % out)
-        if ctx:
+        if ctx and page:
             try:
-                ctx.close()
+                page.close()      # 只关自己开的页；公共浏览器留着（别 ctx.close()）
             except Exception as e:
-                log("ctx.close:", e)
+                log("page.close:", e)
 
 
 if __name__ == "__main__":

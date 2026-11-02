@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bucket_runner  # noqa: E402
 import cli  # noqa: E402
 import csdn_ui as ui  # noqa: E402
-import list_page  # noqa: E402
+import execution_state as es  # noqa: E402
+import remote_lookup  # noqa: E402
 from playwright.sync_api import expect  # noqa: E402
 
 LIST_URL = "https://mp-admin.csdn.net/silkroad-dist/#/distribute/resource/list?channelType=page"
@@ -56,16 +57,17 @@ def verify_created(page, name):
     页面怎么翻、怎么筛在共用层 `list_page`。
     """
     try:
-        ui.goto(page, TEAM_URL)
-        lp = list_page.open_list(page, wait_input=PH_TEAM_FILTER)
-        lp.filter({PH_TEAM_FILTER: name})
-        lp.query(wait_ms=0, wait_rows=False)      # 下一句已经在等这一行
-        hit = lp.row_containing(name, timeout=8) is not None
-        ui.log("  回读核对: %s" % ("✓ 列表里已出现该任务组" if hit else "✗ 列表里查不到该任务组"))
-        return hit
+        lp = remote_lookup.open(page, TEAM_URL, filter_placeholder=PH_TEAM_FILTER)
+        state = remote_lookup.exact(lp, name, PH_TEAM_FILTER)
+        ui.log("  回读核对: %s" % (
+            "✓ 列表里已出现该任务组" if state.is_found else
+            "✗ 列表里查不到该任务组" if state.is_absent else
+            "? 回读未确认：%s" % state.reason))
+        return state
     except Exception as e:
-        ui.log("  回读核对异常（按未通过处理）: %s" % str(e).splitlines()[0][:120])
-        return False
+        reason = str(e).splitlines()[0][:120]
+        ui.log("  回读核对异常（记未确认）: %s" % reason)
+        return es.unknown(reason)
 
 
 def run(s, cfg):
@@ -133,9 +135,10 @@ def run(s, cfg):
         return False
     msgs = s.page.locator(".el-message").all_inner_texts()
     ui.log("  已提交任务组 | 提示:%s" % msgs)
-    if not verify_created(s.page, name):
-        ui.log("  ⚠ 提交后回读查不到该任务组 → 记 warn（下次重跑；结尾 RESULT: HAS_WARN）")
-        return bucket_runner.WARN
+    state = verify_created(s.page, name)
+    if not state.is_found:
+        ui.log("  ⚠ 提交后回读未确认该任务组 → 下次先远端对账，不盲重建")
+        return bucket_runner.NEEDS_RECONCILE
     return "submitted"   # 真创建了 → 账本记 submitted，再跑时永远跳过
 
 
@@ -154,12 +157,20 @@ def main():
 
     try:
         with ctx.session(args) as s:
+            key = "taskGroup|%s" % camp["taskGroupName"]
+
             ctx.report = bucket_runner.run_buckets(
                 [ctx.cfg],
                 lambda c: run(s, c),
-                key_of=lambda c: "taskGroup|%s" % camp["taskGroupName"],
+                key_of=lambda c: key,
                 describe=lambda c: camp["taskGroupName"],
                 progress=ctx.progress,
+                reconcile=lambda c: verify_created(s.page, camp["taskGroupName"]),
+                payload_of=lambda c: {
+                    "taskGroupName": c["campaign"]["taskGroupName"],
+                    "businessLine": c["controls"]["defaults"]["businessLine"],
+                    "subBusinessLine": c["audiences"][0]["subBusinessLine"],
+                },
                 on_item_fail=lambda c: ui.dismiss_dialogs(s.page),
                 log=ui.log,
                 dry_run=not args.submit,

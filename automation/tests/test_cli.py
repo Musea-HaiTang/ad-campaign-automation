@@ -104,6 +104,22 @@ class ContextTest(unittest.TestCase):
         reset = cli.open_progress("/act", "x_progress.json", reset=True)
         self.assertEqual(reset.data, {}, "reset=True 就是空账本")
 
+    def test_正式提交时账本按严格模式打开(self):
+        with mock.patch.object(cli, "open_progress", return_value="strict-ledger") as opened:
+            ctx = cli.context(mkargs(submit=True), shots="ads_shots",
+                              progress="ads_progress.json")
+        self.assertEqual(ctx.progress, "strict-ledger")
+        opened.assert_called_once_with(
+            str(self.act), "ads_progress.json", reset=False, strict=True)
+
+    def test_正式账本损坏时用退出码2停下(self):
+        path = pathlib.Path(self.act) / "日志" / "broken.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{ 坏", encoding="utf-8")
+        with self.assertRaises(SystemExit) as e:
+            cli.open_progress(str(self.act), "broken.json", strict=True)
+        self.assertEqual(e.exception.code, 2)
+
 
 class SessionTest(unittest.TestCase):
     def test_会话参数由外壳定(self):

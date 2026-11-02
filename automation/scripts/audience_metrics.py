@@ -31,8 +31,8 @@ PH_DATE_FROM = "开始日期"
 PH_DATE_TO = "结束日期"
 
 DATE_FROM = "2020-01-01"              # 老客群也要能查出来
-DEF_TARGET_EXPOSURE = 20000           # 当期口径（用户 2026-09-21 定）：目标
-DEF_MIN_EXPOSURE = 10000              # 当期口径：底线
+DEF_TARGET_EXPOSURE = 10000           # 当前口径：日均曝光(预估)达标线
+DEF_MIN_EXPOSURE = DEF_TARGET_EXPOSURE
 
 OK = "达标"
 NEAR = "过线未达标"
@@ -174,8 +174,11 @@ def wait_ready(lp, names, *, timeout_s=900, interval_s=10, prefix="", creator=""
 def report(page_names, metrics, target=DEF_TARGET_EXPOSURE, floor=DEF_MIN_EXPOSURE, log=print):
     """打达标表 + 汇总。返回 (达标数, 未达标数, 没读到数)。"""
     okc = miss = 0
-    log("---- 客群达标（日均曝光(预估) 目标 %s / 底线 %s）----"
-        % (fmt(target), fmt(floor)))
+    if target == floor:
+        rule = "≥ %s" % fmt(target)
+    else:
+        rule = "目标 %s / 底线 %s" % (fmt(target), fmt(floor))
+    log("---- 客群达标（日均曝光(预估) %s）----" % rule)
     for n in page_names:
         m = metrics.get(n)
         if not m:

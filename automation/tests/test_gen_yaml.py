@@ -28,6 +28,7 @@ def fake_def(n_copies=3, abgroups=None):
         "audience": "企业里的研发团队",
         "topic": "WorkBuddy 企业版（腾讯企业智能体）",
         "keywords": "CodeBuddy,WorkBuddy",
+        "reviewThresholdExposure": 3000,
         "kwNote": "测试",
         "copies": [
             {"role": "control", "label": "对照", "title": "标题A", "summary": "摘要A"},
@@ -46,7 +47,7 @@ def fake_def(n_copies=3, abgroups=None):
         "subBusinessLine": "训练营与大赛",
         "taskOrder": {
             "businessLine": "企业服务事业部", "taskGroup": "腾讯云产品-hang",
-            "channel": "PC-博客-详情页-相关推荐T0", "price": 30,
+            "channel": "PC博客详情页-新模版-T0", "price": 30,
             "channelSizeId": "后台点渠道自动带上",
             "deliveryDate": {"mode": "set_time", "start": "2026-10-12", "end": "2026-10-31",
                              "timeStart": 8, "timeEnd": 23},
@@ -55,9 +56,9 @@ def fake_def(n_copies=3, abgroups=None):
     }
 
 
-def build(d):
+def build(d, username=gen_yaml.DEFAULT_USERNAME):
     """跑一遍生成器的装配（`gen_yaml.build` 直接返回 dict，不落盘、不碰后台）。"""
-    return gen_yaml.build(d)
+    return gen_yaml.build(d, username=username)
 
 
 class DeriveAbGroupsTest(unittest.TestCase):
@@ -84,6 +85,7 @@ class DeriveAbGroupsTest(unittest.TestCase):
     def test_首投生成的_abGroups_名字必须等于_resources_名字(self):
         y = build(fake_def(3))
         aud = y["audiences"][0]
+        self.assertEqual(aud["reviewThresholdExposure"], 3000)
         self.assertEqual([r["name"] for r in aud["resources"]],
                          [g["resource"] for g in aud["abGroups"]])
         self.assertEqual([g["weightPct"] for g in aud["abGroups"]], [34, 33, 33])
@@ -94,6 +96,22 @@ class DeriveAbGroupsTest(unittest.TestCase):
                 {"label": "实验组2", "resource": "老资源 · 实验2", "weightPct": 33}]
         y = build(fake_def(0, abgroups=hand))
         self.assertEqual(y["audiences"][0]["abGroups"], hand)
+
+    def test_生成器使用动态广告新控件(self):
+        y = build(fake_def(3))
+        controls = y["controls"]
+        self.assertEqual(controls["materialPath"], ["动态广告", "其它"])
+        self.assertEqual(controls["username"], "lihang")
+        self.assertEqual(controls["fields"], {
+            "link": {"placeholder": "请输入URL解析"},
+            "title": {"placeholder": "解析自动生成标题"},
+            "username": {"placeholder": "解析自动生成用户名"},
+            "summary": {"placeholder": "解析自动生成描述", "type": "textarea"},
+        })
+
+    def test_用户名可由接手人覆盖(self):
+        y = build(fake_def(3), username="another-user")
+        self.assertEqual(y["controls"]["username"], "another-user")
 
 
 if __name__ == "__main__":

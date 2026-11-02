@@ -12,6 +12,7 @@ import shutil
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]   # automation/
@@ -156,7 +157,7 @@ class CsdnUiTest(unittest.TestCase):
     def test_穿梭框_勾选并移到右侧(self):
         page = FakePage()
         s = self._session(page)
-        csdn_ui.transfer(s, page, "PC-博客-详情页-相关推荐T0")
+        csdn_ui.transfer(s, page, "PC博客详情页-新模版-T0")
         self.assertTrue(page.transfer_checked, "左侧应勾上")
         self.assertTrue(page.transfer_moved, "应移到右侧")
 
@@ -245,6 +246,74 @@ class WaitHelpersTest(unittest.TestCase):
             self.assertFalse(csdn_ui.click_query(page, floor_ms=1, timeout=0.4))
         self.assertGreaterEqual(time.time() - t0, 0.35, "看得见的遮罩要等到上限，别提前收手")
         self.assertTrue(any("可能是旧的" in x for x in logs), "要留下「这次数可能是旧的」的说明")
+
+
+class WriteLockTest(unittest.TestCase):
+    """真办事（--submit）那把写锁：同一时刻只许一个脚本往后台建东西。"""
+
+    def test_第二个写锁被拦下来(self):
+        with csdn_ui._write_lock():
+            with self.assertRaises(RuntimeError):
+                with csdn_ui._write_lock():
+                    pass
+        with csdn_ui._write_lock():          # 松手后还能再拿
+            pass
+
+
+class LoginIdentityTest(unittest.TestCase):
+    class Page:
+        def __init__(self, data):
+            self.data = data
+
+        def evaluate(self, js):
+            return self.data
+
+        def wait_for_timeout(self, ms):
+            pass
+
+    def test_身份齐全时返回当前用户名(self):
+        page = self.Page({
+            "userName": "lihang1", "hasToken": True, "hasUser": True,
+            "url": "https://mp-admin.csdn.net/",
+        })
+        self.assertEqual(csdn_ui.require_login_identity(page, timeout=0.01), "lihang1")
+
+    def test_只有旧会话没有用户名时拒绝执行(self):
+        page = self.Page({
+            "userName": "", "hasToken": False, "hasUser": False,
+            "url": "https://mp-admin.csdn.net/",
+        })
+        with self.assertRaises(RuntimeError) as ctx:
+            csdn_ui.require_login_identity(page, timeout=0.01)
+        self.assertIn("登录身份不完整", str(ctx.exception))
+        self.assertIn("wait_login.py", str(ctx.exception))
+
+
+class BrowserRecoveryTest(unittest.TestCase):
+    def test_恢复页面时重启公共浏览器(self):
+        page = mock.Mock()
+        fresh = object()
+        s = SimpleNamespace(page=page, playwright=object(), headed=False)
+        with mock.patch.object(csdn_ui.broker, "stop") as stop, \
+                mock.patch.object(csdn_ui, "open_healthy_page", return_value=fresh) as opened:
+            csdn_ui.recover(s)
+
+        stop.assert_called_once_with()
+        opened.assert_called_once_with(s.playwright, headed=False)
+        self.assertIs(s.page, fresh)
+
+    def test_目标页导航超时后直接重启浏览器再重试(self):
+        s = SimpleNamespace(page=mock.Mock(), playwright=object(), headed=False)
+        action = mock.Mock(side_effect=[
+            RuntimeError("Page.goto: Timeout 25000ms exceeded"),
+            "ok",
+        ])
+        with mock.patch.object(csdn_ui, "recover") as recover:
+            result = csdn_ui.retry_browser_action(s, action, what="资源列表准备")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(action.call_count, 2)
+        recover.assert_called_once_with(s)
 
 
 if __name__ == "__main__":

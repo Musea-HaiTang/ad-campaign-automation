@@ -7,6 +7,8 @@
 import pathlib
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]   # automation/
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -72,6 +74,63 @@ class DeletedAudienceTest(unittest.TestCase):
         notes, real = check_campaign.split_deleted_audiences([self.NAME, gone], self.NAME)
         self.assertEqual(real, [gone])
         self.assertEqual(len(notes), 1)
+
+
+class ResourceSearchTest(unittest.TestCase):
+    def test_前缀搜索后按完整名称精确匹配(self):
+        expected = ["prefix · 对照", "prefix · 实验1", "prefix · 实验2"]
+        actual = set(expected + ["prefix · 对照-2"])
+        self.assertEqual(
+            {n: True for n in expected},
+            check_campaign.classify_resource_names(expected, actual, True),
+        )
+
+    def test_查询不完整时不能把没找到报成确认缺失(self):
+        got = check_campaign.classify_resource_names(
+            ["prefix · 对照", "prefix · 实验1"],
+            {"prefix · 对照"},
+            verified=False,
+        )
+        self.assertTrue(got["prefix · 对照"])
+        self.assertIsNone(got["prefix · 实验1"])
+
+    def test_资源结果跨页合并(self):
+        class FakeListPage:
+            def __init__(self):
+                self.index = 0
+                self.pages = [
+                    [SimpleNamespace(id="1", cells=["1", "prefix · 对照"])],
+                    [SimpleNamespace(id="2", cells=["2", "prefix · 实验1"])],
+                ]
+
+            def rows(self):
+                return self.pages[self.index]
+
+            def table_text(self):
+                return str(self.index)
+
+        lp = FakeListPage()
+        def fake_next(page, current, timeout=8):
+            lp.index += 1
+            return (True, True) if lp.index == 1 else (False, True)
+
+        with mock.patch.object(
+            check_campaign, "_click_next_resource_page", side_effect=fake_next
+        ):
+            rows, complete = check_campaign.collect_resource_rows(object(), lp)
+        self.assertTrue(complete)
+        self.assertEqual(["1", "2"], [row.id for row in rows])
+
+    def test_资源身份必须完整名称全等(self):
+        self.assertTrue(check_campaign.resource_name_matches(
+            "prefix · 实验2-5", "prefix · 实验2-5"
+        ))
+        self.assertFalse(check_campaign.resource_name_matches(
+            "prefix · 实验2", "prefix · 实验2-5"
+        ))
+        self.assertFalse(check_campaign.resource_name_matches(
+            "prefix · 对照", "prefix · 对照-2"
+        ))
 
 
 if __name__ == "__main__":

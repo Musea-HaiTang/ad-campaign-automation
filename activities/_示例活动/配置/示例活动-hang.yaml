@@ -5,24 +5,26 @@ adType: blog-page-t0
 label: 示例活动-hang-3类
 controls:
   channelType: 页面类
-  channel: PC-博客-详情页-相关推荐T0
+  channel: PC博客详情页-新模版-T0
   materialPath:
-  - 静态广告
-  - 信息流
-  - 文本
+  - 动态广告
+  - 其它
+  username: lihang
   defaults:
     businessLine: 示例事业部
     isPopup: false
     adClient: 广告
     closeBtnColor: 浅色
   fields:
-    title:
-      placeholder: 请输入广告标题
-    summary:
-      placeholder: 请输入广告摘要
-      type: textarea
     link:
-      placeholder: 请输入点击链接
+      placeholder: 请输入URL解析
+    title:
+      placeholder: 解析自动生成标题
+    username:
+      placeholder: 解析自动生成用户名
+    summary:
+      placeholder: 解析自动生成描述
+      type: textarea
 campaign:
   brand: 示例活动
   owner: hang
@@ -31,6 +33,7 @@ campaign:
   activityLink: https://example.com/activity
 audiences:
 - id: A
+  reviewThresholdExposure: 3000
   topic: 示例人群 A / 写代码的人
   target: 用 AI 工具写代码的开发者（示例）
   taskName: 示例活动-hang-A类
@@ -43,17 +46,14 @@ audiences:
     name: 示例活动-hang-A类 · 对照
     title: 示例标题（对照）：同一人群只换文案
     summary: 示例摘要（对照）——同一个客群只换文案，才比得出哪句话有吸引力。
-    highlight: ''
   - role: experiment1
     name: 示例活动-hang-A类 · 实验1
     title: 示例标题（实验1）：换个角度说
-    summary: 示例摘要（实验1）——换角度，或者把关键词标红。
-    highlight: 示例词
+    summary: 示例摘要（实验1）——同一个客群换一个角度说。
   - role: experiment2
     name: 示例活动-hang-A类 · 实验2
     title: 示例标题（实验2）
     summary: 示例摘要（实验2）
-    highlight: ''
   abGroups:
   - label: 对照组
     resource: 示例活动-hang-A类 · 对照
@@ -65,6 +65,7 @@ audiences:
     resource: 示例活动-hang-A类 · 实验2
     weightPct: 33
 - id: B
+  reviewThresholdExposure: 1500
   topic: 示例人群 B / 剪视频的人
   target: 做短视频与素材批量处理的人（示例）
   taskName: 示例活动-hang-B类
@@ -77,12 +78,10 @@ audiences:
     name: 示例活动-hang-B类 · 对照
     title: 示例标题（B 桶对照）
     summary: 示例摘要（B 桶对照）——这个桶只挂 2 条资源，演示"2 资源桶"。
-    highlight: ''
   - role: experiment1
     name: 示例活动-hang-B类 · 实验1
     title: 示例标题（B 桶实验1）
     summary: 示例摘要（B 桶实验1）
-    highlight: 示例词
   abGroups:
   - label: 对照组
     resource: 示例活动-hang-B类 · 对照
@@ -94,7 +93,7 @@ taskOrder:
   businessLine: 示例事业部
   taskGroup: 示例活动-hang
   taskName: 示例活动-hang-A类 · 示例人群 A / 写代码的人
-  channel: PC-博客-详情页-相关推荐T0
+  channel: PC博客详情页-新模版-T0
   channelSizeId: 后台点渠道自动带上
   price: 30
   deliveryDate:
