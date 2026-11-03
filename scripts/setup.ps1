@@ -79,9 +79,16 @@ function Resolve-BasePython {
     }
 
     $candidates = @()
-    $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
-    if ($pythonCommand) {
-        $candidates += $pythonCommand.Source
+    $windowsApps = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
+    $pythonCommands = Get-Command python.exe -All -ErrorAction SilentlyContinue
+    foreach ($pythonCommand in $pythonCommands) {
+        if ($pythonCommand.Source -and
+            -not $pythonCommand.Source.StartsWith(
+                $windowsApps + [IO.Path]::DirectorySeparatorChar,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            $candidates += $pythonCommand.Source
+        }
     }
 
     $pyCommand = Get-Command py.exe -ErrorAction SilentlyContinue
@@ -104,7 +111,7 @@ function Resolve-BasePython {
         }
     }
 
-    Stop-Setup "没有找到 Python 3.12-3.14。请安装兼容版本，或使用 -Python <解释器路径> 指定。"
+    Stop-Setup "没有找到可用的 Python 3.12-3.14（WindowsApps 的 python.exe 占位别名会被忽略）。请安装兼容版本，或使用 -Python <解释器路径> 指定。"
 }
 
 function Find-Browser {

@@ -104,7 +104,7 @@ def collect_reviews(db_path: Path) -> list[dict]:
 
 
 def current_session_id(environ=None) -> str:
-    environ = environ or os.environ
+    environ = os.environ if environ is None else environ
     for key in SESSION_ENV_KEYS:
         value = str(environ.get(key) or "").strip()
         if value:

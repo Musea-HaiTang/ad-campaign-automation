@@ -9,10 +9,12 @@ import pathlib
 import shutil
 import sys
 import unittest
+import uuid
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]  # automation/
 sys.path.insert(0, str(ROOT / "scripts"))
+TEST_RUN_ID = uuid.uuid4().hex
 
 import bucket_runner as br  # noqa: E402
 import execution_state as es  # noqa: E402
@@ -32,7 +34,7 @@ class QuietLog:
 class BucketRunnerTest(unittest.TestCase):
     def setUp(self):
         # 用仓库内的 _tmp（已 gitignore）：沙箱里系统临时目录不可写、也删不掉
-        self.base = ROOT / "_tmp" / "test_progress" / self._testMethodName
+        self.base = ROOT / "_tmp" / "test_progress" / f"{TEST_RUN_ID}_{self._testMethodName}"
         self.base.mkdir(parents=True, exist_ok=True)
         self.progress_path = str(self.base / "日志" / "progress.json")
         self.log = QuietLog()

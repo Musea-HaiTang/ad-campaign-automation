@@ -19,6 +19,7 @@ _experiments/
 
 # ---- 下面是原仓库就有的 ----
 .browser-profile/
+.local/
 node_modules/
 *.log
 _*.html
