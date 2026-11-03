@@ -11,6 +11,7 @@ import pathlib
 import shutil
 import sys
 import unittest
+from unittest import mock
 from urllib.parse import quote
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -129,6 +130,14 @@ class WebV2Base(unittest.TestCase):
 
 
 class FetchGateTest(WebV2Base):
+    def test_永久失败仍允许手动重试(self):
+        item = _seed_activity(self.db, "A活动-hang")
+        webapp.ACTIVITIES = {item["id"]: item}
+        webapp.FETCH = {item["id"]: webapp.new_fetch_state()}
+        webapp.FETCH[item["id"]]["permanent"] = True
+        code, _ = webapp.start_fetch(item["id"], "full")
+        self.assertEqual(code, 202)
+
     def test_两个活动各有一份今日取数配额(self):
         a, _ = self._two_activities()
         _mark_fetched_today(self.db, a)
@@ -257,10 +266,49 @@ class FetchAllTest(WebV2Base):
         self.assertEqual(obj["activities"], ["B活动-hang", "A活动-hang"])
 
 
+class FetchWorkerTest(WebV2Base):
+    def test_任务组不存在会暂停自动重试(self):
+        item = _seed_activity(self.db, "A活动-hang")
+        webapp.ACTIVITIES = {item["id"]: item}
+        webapp.FETCH = {item["id"]: webapp.new_fetch_state()}
+        webapp.FETCH[item["id"]]["running"] = True
+        webapp.JOBS.put((item["id"], "full"))
+        webapp.JOBS.put(None)
+        browser = mock.Mock()
+        saved_browser = webapp.BROWSER
+        self.addCleanup(lambda: setattr(webapp, "BROWSER", saved_browser))
+
+        with mock.patch.object(webapp.fetch_mod, "Browser", return_value=browser), \
+                mock.patch.object(
+                    webapp, "_fetch_job",
+                    side_effect=webapp.fetch_mod.PermanentFetchError(
+                        "后台查不到任务组 'A活动-hang' 下的任何任务")), \
+                mock.patch.object(webapp.traceback, "print_exc"):
+            webapp.fetch_worker()
+
+        self.assertIsNone(webapp.auto_action(item))
+        self.assertIn("自动重试已暂停", webapp.fetch_state(item)["error"])
+
+
 class AutoRefreshTest(WebV2Base):
     def test_今天没取过数就先取数(self):
         item = _seed_activity(self.db, "A活动-hang")
         self.assertEqual(webapp.auto_action(item), "full")
+
+    def test_失败尝试也按30分钟间隔重试(self):
+        item = _seed_activity(self.db, "A活动-hang")
+        now = datetime.datetime.now()
+        webapp.AUTO["at"][item["id"]] = now
+        self.assertIsNone(webapp.auto_action(
+            item, now + datetime.timedelta(seconds=30)))
+        self.assertEqual(webapp.auto_action(
+            item, now + datetime.timedelta(minutes=31)), "full")
+
+    def test_永久失败暂停自动重试(self):
+        item = _seed_activity(self.db, "A活动-hang")
+        webapp.FETCH = {item["id"]: webapp.new_fetch_state()}
+        webapp.FETCH[item["id"]]["permanent"] = True
+        self.assertIsNone(webapp.auto_action(item))
 
     def test_取过数之后按间隔刷今天(self):
         item = _seed_activity(self.db, "A活动-hang")

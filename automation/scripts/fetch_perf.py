@@ -61,6 +61,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 API = "https://csdn-distadmin.csdn.net/admin"
 HDR = {"Content-Type": "application/json", "Accept": "application/json"}
 PAGE_SIZE = 100
+
+
+class PermanentFetchError(RuntimeError):
+    """不修正配置或后台状态就不会成功的取数错误。"""
+
+
 def log(*a):
     print(*a, flush=True)
 
@@ -116,7 +122,8 @@ def group_tasks(api, task_group_name):
     """任务组全量清单（id / 名称 / 状态）——**只在兜底时用**，见 `tasks_from_day_rows`。"""
     rows = query_tasks(api, task_group_name)
     if not rows:
-        raise RuntimeError("后台查不到任务组 %r 下的任何任务（任务组名对不对？）" % task_group_name)
+        raise PermanentFetchError(
+            "后台查不到任务组 %r 下的任何任务（任务组名对不对？）" % task_group_name)
     return [{"id": t.get("id"), "name": t.get("taskName") or "",
              "state": status_text(t.get("workStatus"))} for t in rows]
 

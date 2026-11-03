@@ -11,6 +11,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
@@ -189,6 +190,13 @@ class TestFetchResourceRows(unittest.TestCase):
         self.addCleanup(lambda: setattr(fp, "call", real_call))
         self.assertEqual(fp.fetch_resource_rows(
             object(), [{"id": 1112351, "name": "D类-长投", "state": "进行中"}]), [])
+
+
+class TestGroupTasks(unittest.TestCase):
+    def test_任务组没有任务属于永久错误(self):
+        with mock.patch.object(fp, "query_tasks", return_value=[]):
+            with self.assertRaises(fp.PermanentFetchError):
+                fp.group_tasks(object(), "示例活动-xue")
 
 
 class TestTasksFromDayRows(unittest.TestCase):

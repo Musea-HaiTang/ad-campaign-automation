@@ -112,7 +112,7 @@ BROWSER = None              # 取数线程那只连接（挂在公共浏览器�
 #   之后每 N 分钟刷一次「今天」的实时数。理由：只刷今天的话，昨天那行永远停在"半截的今天"，
 #   复盘看到的昨天曝光会偏低。串行仍由取数线程保证（浏览器只有一只）。
 AUTO = {"minutes": 30, "at": {}}    # minutes=0 关掉；at[活动] = 上次自动跑的时刻
-AUTO_STEP = 30                      # 计时线程每 30 秒醒一次看该不该跑（不值当为它精算）
+AUTO_STEP = 30                      # 每 30 秒检查一次；真正执行仍受 AUTO["minutes"] 约束
 
 # 活动生命周期以数据库 `activity.status` / `ended_on` 为准。已收尾活动不再参加整批刷新、
 # 待复盘和自动复盘；登记表里照常留着（页面能看历史），要看历史仍可切过去。
@@ -130,7 +130,7 @@ BATCH = {"mode": None, "at": None, "ids": [], "skipped": []}
 def new_fetch_state():
     """一个活动的取数状态（形状与改造前一致，页面不用改字段名）。"""
     return {"running": False, "mode": None, "started": None, "finished": None, "ok": None,
-            "snapshot": None, "error": None, "by": None,
+            "snapshot": None, "error": None, "by": None, "permanent": False,
             "lines": collections.deque(maxlen=400)}
 
 
@@ -335,19 +335,23 @@ def auto_action(item, now=None):
 
     - **今天没取过数** → 先跑一次「取数」：默认区间补到昨天，把昨天的终值固定下来（一天一次）；
     - 之后按 `AUTO["minutes"]` 的间隔刷「今天」的实时数（随时可点的那种，不落流水）；
-    - 到没到点看 `AUTO["at"]`（**本活动上次自动跑的时刻**）——手动点过不该让自动刷新停摆；
+    - 到没到点看 `AUTO["at"]`（**本活动上次自动尝试的时刻**）——成功和失败都算一次，
+      失败后也按同一间隔重试，不能把 30 秒的调度检查变成 30 秒重试；
+    - 任务组不存在等永久错误暂停自动重试；手动触发仍可重新检查；
     - **活动收尾**（数据库 `activity.status='ended'`）→ 只在「收尾日 + 2 天」补数窗口内继续自动补，
       过了窗口不再自动刷新（2026-10-12）；
     - `AUTO["minutes"] = 0` = 关掉。
     """
     if not AUTO["minutes"] or fetch_stopped(item):
         return None
-    if not today_fetched(item):
-        return "full"
+    if FETCH.get(item["id"], {}).get("permanent"):
+        return None
     last = AUTO["at"].get(item["id"])
     now = now or datetime.datetime.now()
     if last and (now - last) < datetime.timedelta(minutes=AUTO["minutes"]):
         return None
+    if not today_fetched(item):
+        return "full"
     return "today"
 
 
@@ -436,10 +440,14 @@ def fetch_worker():
         try:
             _fetch_job(item, mode)
             st["ok"] = True
+            st["permanent"] = False
             st["snapshot"] = last_fetch(item)
         except Exception as e:
             st["ok"] = False
+            st["permanent"] = isinstance(e, fetch_mod.PermanentFetchError)
             st["error"] = fetch_error(e)
+            if st["permanent"]:
+                st["error"] += "（自动重试已暂停；修正后请手动重试）"
             BROWSER.close()                    # 断开这条连接；下一次重挂（不关浏览器）
             traceback.print_exc()              # 详细堆栈打到服务窗口，方便回头查
         finally:
