@@ -10,11 +10,12 @@
 import pathlib
 import json
 import sys
-import tempfile
 import unittest
 from unittest import mock
 
 import yaml
+
+from _temp import temp_workdir
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]   # automation/
 REPO = ROOT.parent
@@ -119,21 +120,21 @@ class DeriveAbGroupsTest(unittest.TestCase):
         self.assertEqual(y["controls"]["username"], "another-user")
 
     def test_省略参数时读取操作者配置的用户名(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("gen-yaml-default-") as tmp:
             config = pathlib.Path(tmp) / "operator.json"
             config.write_text(json.dumps({"owner": "ops", "ad_username": "login-user"}), encoding="utf-8")
             with mock.patch.object(gen_yaml, "OPERATOR_CONFIG", config):
                 self.assertEqual(gen_yaml.resolve_username(), "login-user")
 
     def test_命令行用户名优先于操作者配置(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("gen-yaml-explicit-") as tmp:
             config = pathlib.Path(tmp) / "operator.json"
             config.write_text(json.dumps({"owner": "ops", "ad_username": "login-user"}), encoding="utf-8")
             with mock.patch.object(gen_yaml, "OPERATOR_CONFIG", config):
                 self.assertEqual(gen_yaml.resolve_username("explicit-user"), "explicit-user")
 
     def test_缺少登录用户名时拒绝生成(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("gen-yaml-missing-") as tmp:
             config = pathlib.Path(tmp) / "operator.json"
             config.write_text(json.dumps({"owner": "ops", "ad_username": None}), encoding="utf-8")
             with mock.patch.object(gen_yaml, "OPERATOR_CONFIG", config):

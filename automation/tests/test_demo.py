@@ -2,8 +2,9 @@
 import datetime
 from pathlib import Path
 import sys
-import tempfile
 import unittest
+
+from _temp import temp_workdir
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +17,7 @@ import workspace_repo  # noqa: E402
 
 class DemoTest(unittest.TestCase):
     def test_空库写入示例且重复执行跳过(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("demo-") as tmp:
             db = Path(tmp) / "demo.db"
             today = datetime.date(2026, 11, 2)
 

@@ -2,9 +2,10 @@
 """公共浏览器 broker：停止失败不能假报成功。"""
 import pathlib
 import sys
-import tempfile
 import unittest
 from unittest import mock
+
+from _temp import temp_workdir
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -38,7 +39,7 @@ class BrokerStopTest(unittest.TestCase):
             self.assertEqual(broker.stop(), 1)
 
     def test_读取浏览器配置文件(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("browser-broker-") as tmp:
             browser = pathlib.Path(tmp) / "chrome.exe"
             browser.write_text("", encoding="utf-8")
             config = pathlib.Path(tmp) / "browser.json"

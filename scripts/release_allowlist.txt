@@ -10,6 +10,7 @@ pytest.ini
 scripts/setup.ps1
 scripts/doctor.py
 scripts/demo.py
+scripts/verify_tests.ps1
 scripts/release_allowlist.txt
 
 automation/AGENTS.md

@@ -3,8 +3,9 @@
 import os
 import shutil
 import sys
-import tempfile
 import unittest
+
+from _temp import make_temp_workdir
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
@@ -14,7 +15,7 @@ import workspace_repo as repo  # noqa: E402
 
 class WorkspacePayloadTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="workspace-payload-")
+        self.tmp = make_temp_workdir("workspace-payload-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.conn = repo.connect(os.path.join(self.tmp, "v2.db"))
         self.addCleanup(self.conn.close)

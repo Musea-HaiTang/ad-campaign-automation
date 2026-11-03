@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 import datetime
 import sqlite3
-import tempfile
 import unittest
 from pathlib import Path
 import sys
+
+from _temp import temp_workdir
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -14,7 +15,7 @@ import db_backup  # noqa: E402
 
 class DatabaseBackupTest(unittest.TestCase):
     def test_备份可读取且只轮转本工具文件(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("db-backup-read-") as tmp:
             root = Path(tmp)
             db_path = root / "投放数据.db"
             conn = sqlite3.connect(db_path)
@@ -47,7 +48,7 @@ class DatabaseBackupTest(unittest.TestCase):
                 conn.close()
 
     def test_默认只保留最近七份(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("db-backup-rotate-") as tmp:
             root = Path(tmp)
             db_path = root / "投放数据.db"
             sqlite3.connect(db_path).close()
@@ -69,7 +70,7 @@ class DatabaseBackupTest(unittest.TestCase):
             self.assertTrue(paths[-1].exists())
 
     def test_数据库不存在时失败(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("db-backup-missing-") as tmp:
             with self.assertRaises(FileNotFoundError):
                 db_backup.backup_database(Path(tmp) / "missing.db")
 

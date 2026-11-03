@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 import sys
-import tempfile
 import unittest
 from unittest import mock
+
+from _temp import temp_workdir
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,7 +15,7 @@ import runtime_state  # noqa: E402
 
 class RuntimeStateTest(unittest.TestCase):
     def test_状态写入读取和按PID清理(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("runtime-state-") as tmp:
             path = Path(tmp) / "state.json"
             with mock.patch.dict(runtime_state.STATE_PATHS, {"test": path}):
                 runtime_state.write_state("test", {"pid": 12, "port": 8771})

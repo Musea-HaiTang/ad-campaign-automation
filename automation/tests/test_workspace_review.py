@@ -4,8 +4,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
+
+from _temp import make_temp_workdir
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
@@ -15,7 +16,7 @@ import workspace_review as review_mod  # noqa: E402
 
 class WorkspaceReviewTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="workspace-review-")
+        self.tmp = make_temp_workdir("workspace-review-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.db_path = os.path.join(self.tmp, "v2.db")
         self.conn = repo.connect(self.db_path)

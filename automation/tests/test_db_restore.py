@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 import sqlite3
-import tempfile
 import unittest
 from pathlib import Path
 import sys
+
+from _temp import temp_workdir
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -24,7 +25,7 @@ def _make_db(path: Path, value: str) -> None:
 
 class DatabaseRestoreTest(unittest.TestCase):
     def test_只读校验快照(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("db-restore-snapshot-") as tmp:
             snapshot = Path(tmp) / "snapshot.db"
             _make_db(snapshot, "ok")
             result = db_restore.validate_snapshot(snapshot)
@@ -32,7 +33,7 @@ class DatabaseRestoreTest(unittest.TestCase):
             self.assertEqual(result["foreign_key_issues"], 0)
 
     def test_恢复前备份当前库并恢复快照(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("db-restore-apply-") as tmp:
             root = Path(tmp)
             target = root / "投放数据.db"
             snapshot = root / "snapshot.db"
@@ -55,7 +56,7 @@ class DatabaseRestoreTest(unittest.TestCase):
                 conn.close()
 
     def test_未确认时不覆盖正式库(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("db-restore-unconfirmed-") as tmp:
             root = Path(tmp)
             target = root / "投放数据.db"
             snapshot = root / "snapshot.db"
@@ -72,7 +73,7 @@ class DatabaseRestoreTest(unittest.TestCase):
                 conn.close()
 
     def test_待恢复快照在备份轮转目录中也能恢复(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("db-restore-backup-") as tmp:
             root = Path(tmp)
             target = root / "投放数据.db"
             backup_dir = root / "backups"

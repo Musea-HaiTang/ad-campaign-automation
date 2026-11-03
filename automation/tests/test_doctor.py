@@ -2,10 +2,11 @@
 import json
 from pathlib import Path
 import sys
-import tempfile
 import types
 import unittest
 from unittest import mock
+
+from _temp import temp_workdir
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +55,7 @@ class DoctorTest(unittest.TestCase):
             doctor.REPO = old_repo
 
     def test_保存广告用户名保留owner(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("doctor-") as tmp:
             path = Path(tmp) / "operator.json"
             path.write_text('{"owner": "hang", "ad_username": null}\n', encoding="utf-8")
             old_path = doctor.OPERATOR_PATH

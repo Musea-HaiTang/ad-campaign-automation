@@ -77,6 +77,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
   -Browser auto
 ```
 
+AI 或自动化部署需要在部署结束时一并验收测试，可增加 `-RunTests`：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
+  -Owner "hang" `
+  -RunTests
+```
+
+部署结果会写入 `.local/setup-result.json`，测试明细写入
+`.local/test-results.json`。检测到 WorkBuddy 的删除垫片环境时，测试会自动按文件分别运行，
+避免单进程递归清理超过批量删除阈值；不需要人工切换独立 PowerShell。
+
 ### 2. 手动创建虚拟环境
 
 ```powershell
@@ -100,6 +112,16 @@ python -m venv .venv
 公共浏览器使用本机 Microsoft Edge 或 Google Chrome，并保存在仓库内的 `.browser-profile/`。
 
 ### 4. 运行测试
+
+AI 或 WorkBuddy 环境使用：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_tests.ps1
+```
+
+脚本会自动选择全量或按文件模式，并把结果写入 `.local/test-results.json`。
+
+普通 PowerShell 也可以直接运行：
 
 ```powershell
 .venv\Scripts\python.exe -m pytest -q

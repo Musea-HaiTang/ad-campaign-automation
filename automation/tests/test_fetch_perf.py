@@ -9,9 +9,10 @@ import datetime
 import os
 import shutil
 import sys
-import tempfile
 import unittest
 from unittest import mock
+
+from _temp import make_temp_workdir
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
@@ -157,7 +158,7 @@ class TestFetchResourceRows(unittest.TestCase):
         self.assertEqual(rows, [["1112351", "D类-长投", "", "对照组", "D类 · 对照-5", "2363", "1"]])
 
     def test_单资源映射从数据库批次读取(self):
-        tmp = tempfile.mkdtemp(prefix="single-map-")
+        tmp = make_temp_workdir("single-map-")
         self.addCleanup(shutil.rmtree, tmp, True)
         path = os.path.join(tmp, "v2.db")
         conn = repo.connect(path)
@@ -238,7 +239,7 @@ class TestTasksToRead(unittest.TestCase):
 
 class TestSyncV2(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fetch-v2-")
+        self.tmp = make_temp_workdir("fetch-v2-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.config = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "..",

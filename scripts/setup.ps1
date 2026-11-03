@@ -3,7 +3,8 @@ param(
     [string]$Owner = "",
     [string]$Python = "",
     [ValidateSet("auto", "edge", "chrome")]
-    [string]$Browser = "auto"
+    [string]$Browser = "auto",
+    [switch]$RunTests
 )
 
 Set-StrictMode -Version Latest
@@ -11,9 +12,18 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
+$LocalDir = Join-Path $RepoRoot ".local"
+$SetupResultPath = Join-Path $LocalDir "setup-result.json"
+$CurrentStep = "启动"
+
+try {
+    New-Item -ItemType Directory -Force -Path $LocalDir | Out-Null
+} catch {
+}
 
 function Write-Step {
     param([int]$Number, [int]$Total, [string]$Text)
+    $script:CurrentStep = $Text
     Write-Host ""
     Write-Host ("[{0}/{1}] {2}" -f $Number, $Total, $Text) -ForegroundColor Cyan
 }
@@ -28,29 +38,82 @@ function Write-Skip {
     Write-Host ("  SKIP: " + $Text) -ForegroundColor Yellow
 }
 
+function Write-SetupResult {
+    param(
+        [string]$Status,
+        [string]$Message,
+        $Tests = $null
+    )
+    try {
+        $payload = [ordered]@{
+            status = $Status
+            message = $Message
+            step = $script:CurrentStep
+            repo = $RepoRoot
+            finishedAt = (Get-Date).ToString("o")
+            tests = $Tests
+        }
+        [System.IO.File]::WriteAllText(
+            $script:SetupResultPath,
+            ($payload | ConvertTo-Json -Depth 8),
+            (New-Object System.Text.UTF8Encoding($false))
+        )
+    } catch {
+    }
+}
+
 function Stop-Setup {
     param([string]$Text)
+    Write-SetupResult -Status "failed" -Message $Text
     Write-Host ("  FAIL: " + $Text) -ForegroundColor Red
     Write-Host ""
     Write-Host "SETUP: FAILED" -ForegroundColor Red
     exit 1
 }
 
-function Get-PythonInfo {
-    param([string]$Path)
-
+function Invoke-PythonProbe {
+    param(
+        [string]$Command,
+        [string]$Code,
+        [string[]]$PrefixArgs = @(),
+        [string[]]$Arguments = @()
+    )
+    $probe = Join-Path $script:LocalDir (
+        "python-probe-" + [Guid]::NewGuid().ToString("N") + ".json"
+    )
     try {
-        $raw = & $Path -c "import sys; print('%d.%d.%d' % sys.version_info[:3])" 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $raw) {
+        & $Command @PrefixArgs -c $Code $probe @Arguments 2>$null | Out-Null
+        if (-not (Test-Path -LiteralPath $probe)) {
             return $null
         }
-        $parts = ([string]$raw).Trim().Split(".")
+        return Get-Content -LiteralPath $probe -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    } finally {
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-PythonInfo {
+    param(
+        [string]$Path,
+        [string[]]$PrefixArgs = @()
+    )
+
+    try {
+        $code = "import json,pathlib,sys; data={'version':'%d.%d.%d' % sys.version_info[:3],'executable':sys.executable}; pathlib.Path(sys.argv[1]).write_text(json.dumps(data),encoding='utf-8')"
+        $data = Invoke-PythonProbe -Command $Path -Code $code -PrefixArgs $PrefixArgs
+        if (-not $data -or -not $data.version) {
+            return $null
+        }
+        $parts = ([string]$data.version).Split(".")
         return [pscustomobject]@{
-            Path = $Path
+            Path = [string]$data.executable
+            Command = $Path
             Major = [int]$parts[0]
             Minor = [int]$parts[1]
             Patch = [int]$parts[2]
-            Text = ([string]$raw).Trim()
+            Text = [string]$data.version
         }
     } catch {
         return $null
@@ -75,7 +138,7 @@ function Resolve-BasePython {
         if (-not (Test-CompatiblePython $info)) {
             Stop-Setup ("指定的 Python 不可用或版本不在 3.12-3.14 范围内: " + $Python)
         }
-        return $candidate
+        return $info.Path
     }
 
     $candidates = @()
@@ -94,12 +157,9 @@ function Resolve-BasePython {
     $pyCommand = Get-Command py.exe -ErrorAction SilentlyContinue
     if ($pyCommand) {
         foreach ($version in @("3.12", "3.13", "3.11", "3.14")) {
-            try {
-                $path = & $pyCommand.Source "-$version" -c "import sys; print(sys.executable)" 2>$null
-                if ($LASTEXITCODE -eq 0 -and $path) {
-                    $candidates += ([string]$path).Trim()
-                }
-            } catch {
+            $info = Get-PythonInfo -Path $pyCommand.Source -PrefixArgs @("-$version")
+            if (Test-CompatiblePython $info) {
+                $candidates += $info.Path
             }
         }
     }
@@ -107,7 +167,7 @@ function Resolve-BasePython {
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         $info = Get-PythonInfo -Path $candidate
         if (Test-CompatiblePython $info) {
-            return $candidate
+            return $info.Path
         }
     }
 
@@ -182,7 +242,7 @@ function Save-BrowserConfig {
 Write-Host "CSDN 广告投放自动化 - 一键部署"
 Write-Host ("项目目录: " + $RepoRoot)
 
-$TotalSteps = 8
+$TotalSteps = if ($RunTests) { 9 } else { 8 }
 
 Write-Step 1 $TotalSteps "检查 Python"
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
@@ -200,9 +260,14 @@ if (Test-Path -LiteralPath $VenvPython) {
 
 Write-Step 2 $TotalSteps "创建或复用虚拟环境"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
-    & $BasePython -m venv (Join-Path $RepoRoot ".venv")
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $VenvPython)) {
+    try {
+        & $BasePython -m venv (Join-Path $RepoRoot ".venv")
+    } catch {
         Stop-Setup "创建 .venv 失败。"
+    }
+    $venvInfo = Get-PythonInfo -Path $VenvPython
+    if (-not (Test-CompatiblePython $venvInfo)) {
+        Stop-Setup "创建 .venv 后无法读取兼容的 Python 版本。"
     }
     Write-Ok ".venv 已创建"
 } else {
@@ -211,15 +276,17 @@ if (-not (Test-Path -LiteralPath $VenvPython)) {
 
 Write-Step 3 $TotalSteps "安装并检查 Python 依赖"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
-& $VenvPython -m pip install --disable-pip-version-check -r $Requirements
-if ($LASTEXITCODE -ne 0) {
+try {
+    & $VenvPython -m pip install --disable-pip-version-check -r $Requirements
+} catch {
     Stop-Setup "安装 requirements.txt 失败。"
 }
-& $VenvPython -c "import yaml, playwright, pytest; import importlib.metadata as m; print('PyYAML', m.version('PyYAML')); print('playwright', m.version('playwright')); print('pytest', m.version('pytest'))"
-if ($LASTEXITCODE -ne 0) {
+$depsCode = "import json,pathlib,sys; import yaml,playwright,pytest; import importlib.metadata as m; data={'PyYAML':m.version('PyYAML'),'playwright':m.version('playwright'),'pytest':m.version('pytest')}; pathlib.Path(sys.argv[1]).write_text(json.dumps(data),encoding='utf-8')"
+$deps = Invoke-PythonProbe -Command $VenvPython -Code $depsCode
+if (-not $deps) {
     Stop-Setup "Python 依赖导入检查失败。"
 }
-Write-Ok "PyYAML / Playwright / pytest 可用"
+Write-Ok ("PyYAML " + $deps.PyYAML + " / Playwright " + $deps.playwright + " / pytest " + $deps.pytest)
 
 Write-Step 4 $TotalSteps "检测浏览器"
 $BrowserInfo = $null
@@ -261,17 +328,12 @@ $Database = Join-Path $RepoRoot "activities\_db\投放数据.db"
 if (Test-Path -LiteralPath $Database) {
     Write-Skip "数据库已存在，未覆盖"
 } else {
-    $env:AD_MANAGEMENT_SETUP_DB = $Database
-    try {
-        $dbCode = "import os,sys; sys.path.insert(0, os.path.join(os.getcwd(),'automation','scripts')); import workspace_repo; conn=workspace_repo.connect(os.environ['AD_MANAGEMENT_SETUP_DB']); print(conn.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]); conn.close()"
-        $schemaVersion = & $VenvPython -c $dbCode
-        if ($LASTEXITCODE -ne 0) {
-            Stop-Setup "数据库初始化失败。"
-        }
-        Write-Ok ("数据库已创建，schema v" + ([string]$schemaVersion).Trim())
-    } finally {
-        Remove-Item Env:\AD_MANAGEMENT_SETUP_DB -ErrorAction SilentlyContinue
+    $dbCode = "import json,os,pathlib,sys; sys.path.insert(0,os.path.join(os.getcwd(),'automation','scripts')); import workspace_repo; conn=workspace_repo.connect(sys.argv[2]); version=conn.execute('SELECT MAX(version) FROM schema_version').fetchone()[0]; conn.close(); pathlib.Path(sys.argv[1]).write_text(json.dumps({'schemaVersion':version}),encoding='utf-8')"
+    $dbResult = Invoke-PythonProbe -Command $VenvPython -Code $dbCode -Arguments @($Database)
+    if (-not $dbResult) {
+        Stop-Setup "数据库初始化失败。"
     }
+    Write-Ok ("数据库已创建，schema v" + $dbResult.schemaVersion)
 }
 
 Write-Step 7 $TotalSteps "保存本地操作者配置"
@@ -307,11 +369,39 @@ if (Test-Path -LiteralPath $OperatorConfig) {
 }
 
 Write-Step 8 $TotalSteps "初始化首次体验示例"
-& $VenvPython (Join-Path $RepoRoot "scripts\demo.py") --db $Database
-if ($LASTEXITCODE -ne 0) {
+try {
+    & $VenvPython (Join-Path $RepoRoot "scripts\demo.py") --db $Database
+} catch {
+    Stop-Setup "示例活动初始化失败。"
+}
+$demoCode = "import json,pathlib,sys; sys.path.insert(0,str(pathlib.Path.cwd() / 'automation' / 'scripts')); import workspace_repo; conn=workspace_repo.connect(sys.argv[2]); count=conn.execute('SELECT COUNT(*) FROM activity').fetchone()[0]; conn.close(); pathlib.Path(sys.argv[1]).write_text(json.dumps({'activityCount':count}),encoding='utf-8')"
+$demoResult = Invoke-PythonProbe -Command $VenvPython -Code $demoCode -Arguments @($Database)
+if (-not $demoResult -or [int]$demoResult.activityCount -lt 1) {
     Stop-Setup "示例活动初始化失败。"
 }
 
+$Tests = $null
+if ($RunTests) {
+    Write-Step 9 $TotalSteps "运行自动化测试"
+    $TestResultPath = Join-Path $LocalDir "test-results.json"
+    $VerifyScript = Join-Path $RepoRoot "scripts\verify_tests.ps1"
+    try {
+        & $VerifyScript -Mode auto -Output $TestResultPath
+    } catch {
+        Stop-Setup "自动化测试启动失败。"
+    }
+    if (-not (Test-Path -LiteralPath $TestResultPath)) {
+        Stop-Setup "自动化测试未生成结果文件。"
+    }
+    $Tests = Get-Content -LiteralPath $TestResultPath -Raw | ConvertFrom-Json
+    if ($Tests.status -ne "ok") {
+        Stop-Setup ("自动化测试失败，详情见 " + $TestResultPath)
+    }
+    Write-Ok ("自动化测试通过（模式：" + $Tests.mode + "）")
+}
+
 Write-Host ""
+Write-SetupResult -Status "ok" -Message "部署完成" -Tests $Tests
 Write-Host "SETUP: OK" -ForegroundColor Green
+Write-Host ("部署结果: " + $SetupResultPath)
 Write-Host "下一步：.venv\Scripts\python.exe scripts\doctor.py --login"

@@ -2,11 +2,12 @@
 import datetime
 import json
 import os
-import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
 import sys
+
+from _temp import temp_workdir
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -24,7 +25,7 @@ class CleanupTest(unittest.TestCase):
         os.utime(path, (stamp, stamp))
 
     def test_按期限清理日志截图和临时文件(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("cleanup-period-") as tmp:
             repo = Path(tmp)
             now = datetime.datetime(2026, 11, 2, 12, 0, tzinfo=datetime.timezone.utc)
             old_log = repo / "activities" / "demo" / "日志" / "runs" / "old.log"
@@ -57,7 +58,7 @@ class CleanupTest(unittest.TestCase):
             self.assertEqual(len(result["removed"]["temp"]), 1)
 
     def test_浏览器缓存清理保留登录态和扩展配置(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("cleanup-browser-") as tmp:
             profile = Path(tmp) / ".browser-profile"
             cache_files = [
                 profile / "Default" / "Cache" / "data_0",
@@ -81,7 +82,7 @@ class CleanupTest(unittest.TestCase):
             self.assertTrue(all(path.exists() for path in protected))
 
     def test_七天内已检查时跳过浏览器缓存(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("cleanup-skip-") as tmp:
             root = Path(tmp)
             profile = root / "profile"
             cache = profile / "Default" / "Cache" / "data"
@@ -98,7 +99,7 @@ class CleanupTest(unittest.TestCase):
             self.assertTrue(cache.exists())
 
     def test_profile超过上限时等待确认(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("cleanup-limit-") as tmp:
             root = Path(tmp)
             profile = root / "profile"
             cache = profile / "Default" / "Cache" / "data"
@@ -114,7 +115,7 @@ class CleanupTest(unittest.TestCase):
             self.assertTrue(cache.exists())
 
     def test_浏览器运行中拒绝手动清理(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("cleanup-running-") as tmp:
             profile = Path(tmp) / "profile"
             cache = profile / "Default" / "Cache" / "data"
             self._write(cache)
@@ -124,7 +125,7 @@ class CleanupTest(unittest.TestCase):
             self.assertTrue(cache.exists())
 
     def test_深度清理只额外删除可重建组件缓存(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temp_workdir("cleanup-deep-") as tmp:
             profile = Path(tmp) / "profile"
             component_cache = profile / "ProvenanceData" / "model.bin"
             cookies = profile / "Default" / "Network" / "Cookies"

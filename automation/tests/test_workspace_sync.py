@@ -3,10 +3,11 @@
 import os
 import shutil
 import sys
-import tempfile
 import unittest
 from copy import deepcopy
 from unittest import mock
+
+from _temp import make_temp_workdir
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 
@@ -22,7 +23,7 @@ CONFIG = os.path.join(
 
 class WorkspaceSyncTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="workspace-sync-")
+        self.tmp = make_temp_workdir("workspace-sync-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.db_path = os.path.join(self.tmp, "v2.db")
         self.cfg = campaign.load(CONFIG)
