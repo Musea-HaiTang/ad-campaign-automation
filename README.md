@@ -72,22 +72,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
-  -Owner "hang" `
+  -Owner "OWNER_NAME" `
   -Python "<Python 3.12-3.14 解释器路径>" `
   -Browser auto
 ```
 
-AI 或自动化部署需要在部署结束时一并验收测试，可增加 `-RunTests`：
+AI 或自动化部署使用 Python 入口，不依赖 PowerShell 启动外部程序：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 `
-  -Owner "hang" `
-  -RunTests
+python .\scripts\setup_ai.py --owner "OWNER_NAME" --run-tests
 ```
 
 部署结果会写入 `.local/setup-result.json`，测试明细写入
 `.local/test-results.json`。检测到 WorkBuddy 的删除垫片环境时，测试会自动按文件分别运行，
 避免单进程递归清理超过批量删除阈值；不需要人工切换独立 PowerShell。
+
+普通 Windows PowerShell 部署仍可使用：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\setup.ps1 -RunTests
+```
 
 ### 2. 手动创建虚拟环境
 
@@ -116,7 +121,7 @@ python -m venv .venv
 AI 或 WorkBuddy 环境使用：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify_tests.ps1
+python .\scripts\verify_tests.py
 ```
 
 脚本会自动选择全量或按文件模式，并把结果写入 `.local/test-results.json`。

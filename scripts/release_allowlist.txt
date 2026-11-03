@@ -8,8 +8,10 @@ requirements.txt
 pytest.ini
 
 scripts/setup.ps1
+scripts/setup_ai.py
 scripts/doctor.py
 scripts/demo.py
+scripts/verify_tests.py
 scripts/verify_tests.ps1
 scripts/release_allowlist.txt
 
