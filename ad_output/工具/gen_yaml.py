@@ -72,7 +72,7 @@ def resolve_username(cli_username=None):
         return username
     if not OPERATOR_CONFIG.is_file():
         raise SystemExit(
-            "缺少 .local/operator.json。先运行 scripts/setup.ps1，"
+            "缺少 .local/operator.json。先运行 README 中的 AI 一键部署，"
             "再运行 .venv\\Scripts\\python.exe scripts\\doctor.py --login 保存登录用户名。")
     try:
         data = json.loads(OPERATOR_CONFIG.read_text(encoding="utf-8"))

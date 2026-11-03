@@ -34,6 +34,8 @@ LEGACY_REFERENCES = (
     "fetch_log",
     "daily_change",
     "批次/2026-",
+    "scripts/setup.ps1",
+    "scripts/verify_tests.ps1",
 )
 MACHINE_SPECIFIC_REFERENCES = (
     "3.12.4",
@@ -84,6 +86,12 @@ class DocsConsistencyTest(unittest.TestCase):
                     hits.append(f"{path.relative_to(ROOT)}: {pattern}")
         self.assertEqual(hits, [], "发现废弃运行引用：\n" + "\n".join(hits))
 
+    def test_部署入口只保留_AI_Python_版本(self):
+        self.assertFalse((ROOT / "scripts" / "setup.ps1").exists())
+        self.assertFalse((ROOT / "scripts" / "verify_tests.ps1").exists())
+        self.assertTrue((ROOT / "scripts" / "setup_ai.py").is_file())
+        self.assertTrue((ROOT / "scripts" / "verify_tests.py").is_file())
+
     def test_关键运维文档存在(self):
         required = (
             ROOT / "README.md",
@@ -94,6 +102,9 @@ class DocsConsistencyTest(unittest.TestCase):
             ROOT / "automation" / "docs" / "数据库v2说明.md",
             ROOT / "automation" / "docs" / "数据库迁移版本.md",
             ROOT / "automation" / "docs" / "磁盘清理.md",
+            ROOT / "automation" / "docs" / "部署说明.md",
+            ROOT / "automation" / "docs" / "登录与验收.md",
+            ROOT / "automation" / "docs" / "故障排查.md",
             ROOT / "automation" / "docs" / "巡检与自动复盘.md",
             ROOT / "automation" / "docs" / "复盘会话格式.md",
             ROOT / "ad_output" / "AGENTS.md",
@@ -112,6 +123,9 @@ class DocsConsistencyTest(unittest.TestCase):
             "automation/docs/数据库v2说明.md",
             "automation/docs/数据库迁移版本.md",
             "automation/docs/磁盘清理.md",
+            "automation/docs/部署说明.md",
+            "automation/docs/登录与验收.md",
+            "automation/docs/故障排查.md",
             "automation/docs/巡检与自动复盘.md",
             "automation/docs/复盘会话格式.md",
             "ad_output/AGENTS.md",

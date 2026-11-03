@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import traceback
+import urllib.request
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -294,6 +295,35 @@ def run_tests(python: str) -> dict:
     return result
 
 
+def start_board(python: str) -> dict:
+    vbs = ROOT / "web" / "start-hidden.vbs"
+    service = ROOT / "automation" / "scripts" / "board_service.py"
+    try:
+        os.startfile(str(vbs), arguments="/quiet")
+    except (AttributeError, OSError) as exc:
+        raise SetupError(f"无法通过 Windows shell 启动看板：{exc}") from exc
+    log("已通过 Windows shell 启动看板")
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + 30
+    last_error = "看板未返回地址"
+    while time.monotonic() < deadline:
+        completed = run([python, str(service), "--url"])
+        url = completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
+        if completed.returncode == 0 and url.startswith("http://127.0.0.1:"):
+            try:
+                with opener.open(url.rstrip("/") + "/api/health", timeout=5) as response:
+                    health = json.loads(response.read().decode("utf-8"))
+                if health.get("service") == "ad_management-board":
+                    log(f"看板：{url}")
+                    return {"url": url, "health": health}
+                last_error = "健康检查返回了其他服务"
+            except Exception as exc:
+                last_error = str(exc)
+        time.sleep(1)
+    raise SetupError(f"看板启动失败：{last_error}")
+
+
 def write_setup_result(status: str, message: str, data: dict | None = None) -> None:
     payload = {
         "status": status,
@@ -315,10 +345,13 @@ def main() -> int:
     parser.add_argument("--owner", default="")
     parser.add_argument("--browser", choices=("auto", "edge", "chrome"), default="auto")
     parser.add_argument("--run-tests", action="store_true")
+    parser.add_argument("--start-board", action="store_true")
     args = parser.parse_args()
 
     LOCAL.mkdir(parents=True, exist_ok=True)
     SETUP_LOG.write_text("", encoding="utf-8")
+    SETUP_RESULT.unlink(missing_ok=True)
+    (LOCAL / "test-results.json").unlink(missing_ok=True)
     log("CSDN 广告投放自动化 - AI 一键部署")
     log(f"项目目录：{ROOT}")
     try:
@@ -336,13 +369,16 @@ def main() -> int:
             (ROOT / relative).mkdir(parents=True, exist_ok=True)
         ensure_database(python)
         tests = run_tests(python) if args.run_tests else None
+        board = start_board(python) if args.start_board else None
         write_setup_result("ok", "部署完成", {
             "venvPython": info,
             "browser": browser,
             "tests": tests,
+            "board": board,
         })
         print("SETUP: OK")
         print(f"部署结果: {SETUP_RESULT}")
+        print("下一步：运行 scripts/doctor.py --login，并在打开的浏览器中完成 CSDN 登录。")
         return 0
     except Exception as exc:
         with SETUP_LOG.open("a", encoding="utf-8") as handle:

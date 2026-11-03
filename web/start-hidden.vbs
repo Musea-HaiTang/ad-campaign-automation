@@ -2,15 +2,20 @@
 ' wscript.exe is a GUI app -> no console window ever appears.
 ' Stop it later with scripts\stop-service.bat (that does NOT stop the shared browser).
 Option Explicit
-Dim sh, fso, web, root, py, script, rc, logPath, exec, url
+Dim sh, fso, web, root, py, script, rc, logPath, exec, url, quiet
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
+quiet = False
+If WScript.Arguments.Count > 0 Then
+  quiet = (LCase(WScript.Arguments(0)) = "/quiet")
+End If
 web = fso.GetParentFolderName(WScript.ScriptFullName)          ' ...\ad_management\web
 root = fso.GetParentFolderName(web)                            ' ...\ad_management
 py = fso.BuildPath(root, ".venv\Scripts\python.exe")
 script = fso.BuildPath(root, "automation\scripts\board_service.py")
 rc = sh.Run("""" & py & """ -u """ & script & """ --start", 0, True)
 If rc <> 0 Then
+  If quiet Then WScript.Quit 1
   logPath = sh.ExpandEnvironmentStrings("%TEMP%\board_service.log")
   MsgBox "Dashboard service did NOT start." & vbCrLf & vbCrLf & _
          "Details: " & logPath & vbCrLf & _
@@ -19,8 +24,10 @@ Else
   Set exec = sh.Exec("""" & py & """ -u """ & script & """ --url")
   url = Trim(exec.StdOut.ReadAll)
   If exec.ExitCode = 0 And Len(url) > 0 Then
-    sh.Run url, 1, False
+    If Not quiet Then sh.Run url, 1, False
   Else
+    If quiet Then WScript.Quit 2
     MsgBox "Dashboard started, but the actual URL could not be read.", 16, "Dashboard service"
   End If
 End If
+If quiet Then WScript.Quit 0

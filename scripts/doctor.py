@@ -152,7 +152,7 @@ def check_python(failures: list[str]) -> None:
         ok,
         "Python",
         f"{version} ({sys.executable})",
-        "使用 Python 3.12-3.14，并重新运行 scripts/setup.ps1。",
+        "使用 Python 3.12-3.14，并重新运行 README 中的 AI 一键部署。",
         failures,
     )
 
@@ -191,7 +191,7 @@ def check_dependencies(failures: list[str]) -> bool:
             available,
             label,
             version or "未安装",
-            "运行 scripts/setup.ps1 安装 requirements.txt。",
+            "运行 scripts/setup_ai.py 安装 requirements.txt。",
             failures,
         ) and all_ok
     return all_ok
@@ -250,7 +250,7 @@ def check_browser_port(failures: list[str]) -> bool:
 
 def read_operator() -> dict[str, Any]:
     if not OPERATOR_PATH.is_file():
-        raise RuntimeError("缺少 .local/operator.json，请先运行 scripts/setup.ps1 -Owner <owner>")
+        raise RuntimeError("缺少 .local/operator.json，请先运行 scripts/setup_ai.py --owner <owner>")
     data = json.loads(OPERATOR_PATH.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not str(data.get("owner") or "").strip():
         raise RuntimeError(".local/operator.json 缺少 owner")
@@ -277,7 +277,7 @@ def check_operator(failures: list[str]) -> bool:
 
 def check_database(failures: list[str]) -> None:
     if not DB_PATH.is_file():
-        report(False, "数据库", f"不存在: {DB_PATH}", "运行 scripts/setup.ps1 初始化数据库。", failures)
+        report(False, "数据库", f"不存在: {DB_PATH}", "运行 scripts/setup_ai.py 初始化数据库。", failures)
         return
     try:
         uri = "file:" + DB_PATH.as_posix() + "?mode=ro"
