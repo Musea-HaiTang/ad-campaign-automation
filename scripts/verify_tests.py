@@ -75,10 +75,11 @@ def run_pytest(python: str, targets: list[Path], report: Path) -> dict:
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=300,
         )
         output = completed.stdout
         return_code = completed.returncode
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         output = str(exc)
         return_code = None
 

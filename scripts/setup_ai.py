@@ -35,18 +35,30 @@ def log(message: str) -> None:
         handle.write(line + "\n")
 
 
-def run(command: list[str], check: bool = False) -> subprocess.CompletedProcess:
+def run(
+    command: list[str],
+    check: bool = False,
+    timeout_seconds: int = 300,
+) -> subprocess.CompletedProcess:
     log("$ " + " ".join(command))
-    completed = subprocess.run(
-        command,
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        completed = subprocess.CompletedProcess(
+            command,
+            124,
+            stdout=(exc.stdout or "") + f"\n命令超时（{timeout_seconds} 秒）",
+        )
     if completed.stdout:
         with SETUP_LOG.open("a", encoding="utf-8") as handle:
             handle.write(completed.stdout.rstrip() + "\n")
@@ -98,8 +110,27 @@ def ensure_venv() -> tuple[str, dict]:
     return str(venv_python), info
 
 
+def has_pip(python: str) -> bool:
+    return run([python, "-m", "pip", "--version"]).returncode == 0
+
+
 def install_dependencies(python: str) -> None:
     requirements = ROOT / "requirements.txt"
+    if not has_pip(python):
+        run([python, "-m", "ensurepip", "--upgrade"])
+    if not has_pip(python):
+        run([
+            sys.executable,
+            "-m",
+            "pip",
+            "--python",
+            python,
+            "install",
+            "--disable-pip-version-check",
+            "pip",
+        ])
+    if not has_pip(python):
+        raise SetupError("虚拟环境缺少 pip，ensurepip 和系统 pip 均未能修复")
     completed = run(
         [
             python,
@@ -277,6 +308,9 @@ def write_setup_result(status: str, message: str, data: dict | None = None) -> N
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="AI 环境一键部署")
     parser.add_argument("--owner", default="")
     parser.add_argument("--browser", choices=("auto", "edge", "chrome"), default="auto")
