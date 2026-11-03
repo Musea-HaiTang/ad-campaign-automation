@@ -92,6 +92,11 @@ class DocsConsistencyTest(unittest.TestCase):
         self.assertTrue((ROOT / "scripts" / "setup_ai.py").is_file())
         self.assertTrue((ROOT / "scripts" / "verify_tests.py").is_file())
 
+    def test_发布脚本使用统一测试入口(self):
+        script = (ROOT / "scripts" / "push_github.ps1").read_text(encoding="utf-8")
+        self.assertIn(r"scripts\verify_tests.py", script)
+        self.assertNotIn("-m pytest", script)
+
     def test_关键运维文档存在(self):
         required = (
             ROOT / "README.md",
@@ -155,11 +160,14 @@ class DocsConsistencyTest(unittest.TestCase):
                     missing.append(f"{relative}: {target}")
         self.assertEqual(missing, [], "发布文档存在失效链接：\n" + "\n".join(missing))
 
-    def test_README状态不把已完成项目写成进行中(self):
+    def test_README从首次访问者视角介绍项目(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertNotIn("项目正在按", readme)
-        self.assertNotIn("继续完成 P1", readme)
-        self.assertIn("P0 发布阻断项和 P1 长期维护整改", readme)
+        self.assertIn("## 工作方式", readme)
+        self.assertIn("## 核心能力", readme)
+        self.assertIn("## AI 一键部署", readme)
+        self.assertIn("## 文档导航", readme)
+        self.assertNotIn("P0 发布阻断项", readme)
+        self.assertNotIn("私有仓库", readme)
 
     def test_环境文档不写个人机器Python补丁版本(self):
         hits = []
