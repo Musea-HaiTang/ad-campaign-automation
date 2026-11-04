@@ -107,7 +107,7 @@ def is_up(timeout=1.5):
         return False
     port = _state_port()
     if not runtime_state.process_matches(
-        pid, [PROFILE, "--remote-debugging-port=%d" % port]
+        pid, [PROFILE, "--remote-debugging-port=%d" % port], allow_unknown=True
     ):
         return False
     return _responsive(port, timeout)
@@ -246,8 +246,10 @@ def stray_pids(exe_path=None):
           "Where-Object { $_.CommandLine -like '%s' } | "
           "Select-Object -ExpandProperty ProcessId") % (process_name, PROFILE_MATCH)
     try:
-        out = subprocess.run([ps_exe, "-NoProfile", "-Command", ps],
-                             capture_output=True, text=True, timeout=40)
+        out = runtime_state.run_hidden(
+            [ps_exe, "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=40,
+        )
     except Exception as e:
         log("  ! 查残留浏览器失败：%s" % str(e).splitlines()[0][:100])
         return []
@@ -262,8 +264,10 @@ def _kill_strays(what="清残留", exe_path=None):
         return 0
     log("  %s：%d 个浏览器进程（%s）" % (what, len(pids), "、".join(map(str, pids))))
     for pid in pids:
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                       capture_output=True, text=True)
+        runtime_state.run_hidden(
+            ["taskkill", "/F", "/PID", str(pid)],
+            capture_output=True, text=True,
+        )
     time.sleep(1.5)
     return len(pids)
 
@@ -394,11 +398,13 @@ def stop():
     except (KeyError, TypeError, ValueError):
         log("公共浏览器：没有可验证的本项目运行状态")
         return 0
-    if not runtime_state.process_matches(pid, [PROFILE]):
+    if not runtime_state.process_matches(pid, [PROFILE], allow_unknown=True):
         log("公共浏览器：状态中的 PID %d 不是本项目浏览器，拒绝结束" % pid)
         return 0
     port = _state_port()
-    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+    runtime_state.run_hidden(
+        ["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True
+    )
     time.sleep(1)
     runtime_state.clear_state("browser", pid=pid)
     if _responsive(port):

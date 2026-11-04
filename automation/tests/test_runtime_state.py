@@ -26,8 +26,7 @@ class RuntimeStateTest(unittest.TestCase):
                 self.assertFalse(path.exists())
 
     def test_端口回退跳过占用端口(self):
-        ports = iter([False, False, True])
-        with mock.patch.object(runtime_state, "is_free", side_effect=lambda _p: next(ports)):
+        with mock.patch.object(runtime_state, "listening_ports", return_value=[8770, 8771]):
             self.assertEqual(runtime_state.next_free_port(8770), 8772)
 
     def test_进程身份要求全部片段匹配(self):
@@ -35,6 +34,46 @@ class RuntimeStateTest(unittest.TestCase):
         with mock.patch.object(runtime_state, "process_info", return_value=info):
             self.assertTrue(runtime_state.process_matches(1, [r"D:\repo", "app.py"]))
             self.assertFalse(runtime_state.process_matches(1, [r"D:\repo", "other.py"]))
+
+    def test_进程信息不可用时可选择接受未知(self):
+        with mock.patch.object(runtime_state, "process_info", return_value={}):
+            self.assertFalse(runtime_state.process_matches(1, ["app.py"]))
+            self.assertTrue(
+                runtime_state.process_matches(1, ["app.py"], allow_unknown=True)
+            )
+
+    def test_一次解析多个监听端口(self):
+        rows = """  TCP    127.0.0.1:8770    0.0.0.0:0    LISTENING    123
+  TCP    127.0.0.1:8777    0.0.0.0:0    LISTENING    456
+  TCP    127.0.0.1:9000    0.0.0.0:0    LISTENING    789
+"""
+        with mock.patch.object(
+            runtime_state, "run_hidden",
+            return_value=mock.Mock(stdout=rows),
+        ):
+            self.assertEqual(runtime_state.listening_ports(8770, 10), [8770, 8777])
+
+    def test_后台命令在_WINDOWS_使用隐藏窗口(self):
+        if not runtime_state.HIDDEN_FLAGS:
+            self.skipTest("仅 Windows 需要隐藏控制台参数")
+        with mock.patch.object(runtime_state.subprocess, "run") as run:
+            runtime_state.run_hidden(["cmd.exe", "/c", "exit 0"], capture_output=True)
+        self.assertTrue(
+            run.call_args.kwargs["creationflags"] & runtime_state.HIDDEN_FLAGS
+        )
+
+    def test_文件锁阻止第二个持有者(self):
+        with temp_workdir("runtime-lock-") as tmp:
+            path = Path(tmp) / "service.lock"
+            first = runtime_state.acquire_file_lock(path)
+            self.assertIsNotNone(first)
+            try:
+                self.assertIsNone(runtime_state.acquire_file_lock(path))
+            finally:
+                runtime_state.release_file_lock(first)
+            second = runtime_state.acquire_file_lock(path)
+            self.assertIsNotNone(second)
+            runtime_state.release_file_lock(second)
 
 
 if __name__ == "__main__":

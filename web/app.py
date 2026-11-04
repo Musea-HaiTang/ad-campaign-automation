@@ -101,6 +101,7 @@ DEFAULT_ID = None           # 页面不给 ?activity= 时用哪个活动
 ACTUAL_PORT = None
 SERVICE_NAME = "ad_management-board"
 STARTED_AT = None
+BOARD_LOCK = None
 
 # 取数任务状态：**每个活动一份**（页面轮询它）；取数本身仍是全局串行（浏览器只有一只）
 FETCH = {}
@@ -709,7 +710,13 @@ class BoardServer(ThreadingHTTPServer):
 
 def serve_v2(args):
     """数据库 v2 单库运行：读取、取数和复盘都走同一个库。"""
-    global DB_PATH, DEFAULT_ID, ACTUAL_PORT, STARTED_AT
+    global BOARD_LOCK, DB_PATH, DEFAULT_ID, ACTUAL_PORT, STARTED_AT
+    BOARD_LOCK = runtime_state.acquire_file_lock(
+        runtime_state.TMP / "board-service.lock"
+    )
+    if BOARD_LOCK is None:
+        print("看板服务已经有另一个实例正在运行或启动中", flush=True)
+        return
     existing = runtime_state.read_state("board")
     if existing:
         try:
@@ -722,10 +729,13 @@ def serve_v2(args):
             current.get("service") == SERVICE_NAME
             and int(current.get("pid") or 0) == int(existing.get("pid") or 0)
             and runtime_state.process_matches(
-                int(existing.get("pid") or 0), [str(REPO), "app.py"]
+                int(existing.get("pid") or 0), [str(REPO), "app.py"],
+                allow_unknown=True,
             )
         ):
             print("看板服务已经在运行：http://127.0.0.1:%s/" % existing["port"], flush=True)
+            runtime_state.release_file_lock(BOARD_LOCK)
+            BOARD_LOCK = None
             return
     DB_PATH = args.db
     AUTO["minutes"] = max(0, int(args.auto))
@@ -801,6 +811,8 @@ def serve_v2(args):
         runtime_state.clear_state("board", pid=os.getpid())
         JOBS.put(None)
         worker.join(timeout=10)
+        runtime_state.release_file_lock(BOARD_LOCK)
+        BOARD_LOCK = None
 
 
 def main():

@@ -19,7 +19,7 @@ class BrokerStopTest(unittest.TestCase):
         with mock.patch.object(broker, "_state", return_value=state), \
                 mock.patch.object(broker.runtime_state, "process_matches", return_value=True), \
                 mock.patch.object(broker.runtime_state, "clear_state"), \
-                mock.patch.object(broker.subprocess, "run"), \
+                mock.patch.object(broker.runtime_state, "run_hidden"), \
                 mock.patch.object(broker, "_responsive", return_value=True):
             with self.assertRaises(RuntimeError):
                 broker.stop()
@@ -29,7 +29,7 @@ class BrokerStopTest(unittest.TestCase):
         with mock.patch.object(broker, "_state", return_value=state), \
                 mock.patch.object(broker.runtime_state, "process_matches", return_value=True), \
                 mock.patch.object(broker.runtime_state, "clear_state"), \
-                mock.patch.object(broker.subprocess, "run"), \
+                mock.patch.object(broker.runtime_state, "run_hidden"), \
                 mock.patch.object(
                     broker.cleanup,
                     "maybe_clean_browser_profile",

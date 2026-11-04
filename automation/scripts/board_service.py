@@ -37,34 +37,88 @@ def health(port):
     return data if data.get("service") == SERVICE else {}
 
 
-def current():
+def _same_database(path):
+    expected = os.path.normcase(os.path.abspath(V2_DB))
+    actual = os.path.normcase(os.path.abspath(str(path or "")))
+    return bool(path) and actual == expected
+
+
+def _state_from_health(port):
+    info = health(port)
+    try:
+        pid = int(info.get("pid"))
+        actual_port = int(info.get("port"))
+    except (TypeError, ValueError):
+        return {}
+    if actual_port != int(port) or not _same_database(info.get("db")):
+        return {}
+    return {
+        "service": SERVICE,
+        "pid": pid,
+        "port": actual_port,
+        "host": info.get("host") or "127.0.0.1",
+        "db": info.get("db"),
+        "started": info.get("started"),
+    }
+
+
+def discover_boards(preferred=PREFERRED_PORT):
+    """找出本项目所有健康看板，状态文件损坏时也能复用或清理。"""
+    found = []
+    for port in runtime_state.listening_ports(preferred):
+        state = _state_from_health(port)
+        if state:
+            found.append(state)
+    return found
+
+
+def current(discover=False):
     """返回状态与健康检查都确认属于本项目的看板进程。"""
     state = runtime_state.read_state("board")
-    if not state:
-        return {}
-    try:
-        pid = int(state["pid"])
-        port = int(state["port"])
-    except (KeyError, TypeError, ValueError):
-        runtime_state.clear_state("board")
-        return {}
-    info = health(port)
-    if (
-        info.get("service") == SERVICE
-        and int(info.get("pid") or 0) == pid
-        and int(info.get("port") or 0) == port
-        and runtime_state.process_matches(pid, [REPO, "app.py"])
-    ):
-        return state
-    if not runtime_state.pid_alive(pid):
-        runtime_state.clear_state("board", pid=pid)
+    if state:
+        try:
+            pid = int(state["pid"])
+            port = int(state["port"])
+        except (KeyError, TypeError, ValueError):
+            runtime_state.clear_state("board")
+        else:
+            info = health(port)
+            if (
+                info.get("service") == SERVICE
+                and int(info.get("pid") or 0) == pid
+                and int(info.get("port") or 0) == port
+                and _same_database(info.get("db"))
+                and runtime_state.process_matches(
+                    pid, [REPO, "app.py"], allow_unknown=True
+                )
+            ):
+                return state
+            runtime_state.clear_state("board", pid=pid)
+    if discover:
+        boards = discover_boards()
+        if boards:
+            state = boards[0]
+            runtime_state.write_state("board", state)
+            return state
     return {}
 
 
 def start_hidden(preferred_port=PREFERRED_PORT, auto_minutes=30):
-    running = current()
-    if running:
-        log("看板服务：已经在跑（PID %s），%s" % (running["pid"], board_url(running["port"])))
+    boards = discover_boards(preferred_port)
+    if boards:
+        running = boards[0]
+        runtime_state.write_state("board", running)
+        for duplicate in boards[1:]:
+            runtime_state.run_hidden(
+                ["taskkill", "/F", "/T", "/PID", str(duplicate["pid"])],
+                capture_output=True,
+            )
+            log("看板服务：结束重复实例 PID %s，%s" % (
+                duplicate["pid"], board_url(duplicate["port"])
+            ))
+        log("看板服务：已经在跑（PID %s），%s" % (
+            running["pid"], board_url(running["port"])
+        ))
         return 0
 
     stale = runtime_state.read_state("board")
@@ -105,20 +159,28 @@ def start_hidden(preferred_port=PREFERRED_PORT, auto_minutes=30):
 
 
 def stop():
-    running = current()
-    if not running:
+    boards = discover_boards()
+    if not boards:
+        running = current()
+        boards = [running] if running else []
+    if not boards:
         log("看板服务：没有本项目验证过的运行状态")
         return 0
-    pid = int(running["pid"])
-    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+    for running in boards:
+        pid = int(running["pid"])
+        runtime_state.run_hidden(
+            ["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True
+        )
+        log("看板服务：停掉进程 %d，%s（公共浏览器不动）" % (
+            pid, board_url(running["port"])
+        ))
     time.sleep(1)
-    runtime_state.clear_state("board", pid=pid)
-    log("看板服务：停掉进程 %d（公共浏览器不动）" % pid)
+    runtime_state.clear_state("board")
     return 0
 
 
 def status():
-    running = current()
+    running = current(discover=True)
     if running:
         log("看板服务：在跑（PID %s），%s" % (running["pid"], board_url(running["port"])))
         return 0
@@ -136,7 +198,7 @@ def main():
     parser.add_argument("--auto", type=int, default=30, help="看板自动刷新分钟数，0 = 关闭")
     args = parser.parse_args()
     if args.url:
-        running = current()
+        running = current(discover=True)
         if running:
             print(board_url(running["port"]))
             return 0
