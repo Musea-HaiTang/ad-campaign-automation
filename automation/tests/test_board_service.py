@@ -83,6 +83,12 @@ class BoardServiceTest(unittest.TestCase):
             ["taskkill", "/F", "/T", "/PID", "456"], capture_output=True
         )
 
+    def test_端口扫描失败时仍按状态和健康接口复用(self):
+        state = {"pid": 123, "port": 8771}
+        with mock.patch.object(board_service, "discover_boards", return_value=[]), \
+                mock.patch.object(board_service, "current", return_value=state):
+            self.assertEqual(board_service.start_hidden(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

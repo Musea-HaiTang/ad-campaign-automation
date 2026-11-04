@@ -121,6 +121,13 @@ def start_hidden(preferred_port=PREFERRED_PORT, auto_minutes=30):
         ))
         return 0
 
+    running = current()
+    if running:
+        log("看板服务：已经在跑（PID %s），%s" % (
+            running["pid"], board_url(running["port"])
+        ))
+        return 0
+
     stale = runtime_state.read_state("board")
     if stale:
         runtime_state.clear_state("board", pid=stale.get("pid"))
