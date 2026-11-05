@@ -50,7 +50,9 @@ def sync_config_batch(v2_db_path, cfg, audiences, started_on,
             existing = workspace_repo.get_activity(conn, campaign["taskGroupName"])
             if existing:
                 # 生命周期由数据库启停命令管理；后续执行 YAML 不得把已收尾活动改回 active。
+                # 活动显示名也由主活动配置/首次登记决定，批次 YAML 的 N 类标签不得覆盖它。
                 activity_data.update({
+                    "display_name": existing["display_name"],
                     "started_on": existing["started_on"],
                     "status": existing["status"],
                     "ended_on": existing["ended_on"],

@@ -25,7 +25,9 @@ payload = workspace_payload.build_payload(conn, activity_id, today="2026-10-28")
 - 批次统计；
 - 批次判定和已保存的复盘动作。
 
-`batchStats.runDays` 按任务状态计算：`进行中` 从首个有数据日算到今天，`下线` 等非进行中状态冻结在最后一个有数据日。
+当前批 `task_state=下线` 的桶继续展示历史批次、指标、资源和图表，但 `thresholdEligible=false`，不进入“当前批门槛”弹窗和待复盘项。
+
+在投批次的 `batchStats.runDays` 从首个有数据日算到今天。
 
 ## 网页入口
 

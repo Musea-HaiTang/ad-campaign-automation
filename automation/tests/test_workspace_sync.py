@@ -77,6 +77,27 @@ class WorkspaceSyncTest(unittest.TestCase):
         self.assertEqual(repo.get_bucket_batch(conn, first["batch_ids"][0])["status"],
                          "running")
 
+    def test_execution_yaml_cannot_overwrite_activity_display_name(self):
+        audience = self.cfg["audiences"][0]
+        workspace_sync.sync_config_batch(
+            self.db_path, self.cfg, [audience], "2026-01-05",
+            "首批", status="running",
+        )
+        conn = repo.connect(self.db_path)
+        original = repo.get_activity(conn, self.cfg["campaign"]["taskGroupName"])
+        conn.close()
+
+        next_cfg = deepcopy(self.cfg)
+        next_cfg["label"] = "错误覆盖-1类"
+        workspace_sync.sync_config_batch(
+            self.db_path, next_cfg, [audience], "2026-01-05",
+            "批次执行", status="running",
+        )
+        conn = repo.connect(self.db_path)
+        self.addCleanup(conn.close)
+        current = repo.get_activity(conn, self.cfg["campaign"]["taskGroupName"])
+        self.assertEqual(current["display_name"], original["display_name"])
+
     def test_reused_resource_keeps_copy_snapshot_in_new_batch(self):
         first_aud = self.cfg["audiences"][0]
         first = workspace_sync.sync_config_batch(

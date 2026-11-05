@@ -200,6 +200,51 @@ class TestGroupTasks(unittest.TestCase):
                 fp.group_tasks(object(), "示例活动-xue")
 
 
+class TestQueryTasks(unittest.TestCase):
+    def _body_for(self, active_only):
+        seen = {}
+
+        def fake_call(api, method, path, payload=None):
+            seen.update(payload)
+            return {"total": 0, "list": []}
+
+        with mock.patch.object(fp, "call", fake_call):
+            fp.query_tasks(object(), "示例活动-hang", "2026-11-05",
+                           active_only=active_only)
+        return seen
+
+    def test_today_refresh_queries_only_active_tasks(self):
+        self.assertEqual(self._body_for(True)["workStatus"], "1")
+
+    def test_history_query_keeps_all_task_states(self):
+        self.assertEqual(self._body_for(False)["workStatus"], "")
+
+
+class TestCollect(unittest.TestCase):
+    def test_active_only_does_not_fall_back_to_offline_tasks(self):
+        ctx = mock.Mock()
+        with mock.patch.object(fp, "fetch_day_rows", return_value=[]), \
+                mock.patch.object(fp, "group_tasks") as group_tasks:
+            result = fp.collect(
+                ctx, "示例活动-hang", ["2026-11-05"], known_tasks=15,
+                note=lambda *_: None, active_only=True,
+            )
+        self.assertEqual(result, ([], [], [], ["2026-11-05"]))
+        group_tasks.assert_not_called()
+
+    def test_active_only_returns_tasks_from_active_day_rows(self):
+        ctx = mock.Mock()
+        day_row = ["2026-11-05", "1001", "A类-1", "进行中", 12, 1, 0, 0]
+        with mock.patch.object(fp, "fetch_day_rows", return_value=[day_row]), \
+                mock.patch.object(fp, "fetch_resource_rows", return_value=[]):
+            tasks, rows, _, _ = fp.collect(
+                ctx, "示例活动-hang", ["2026-11-05"], known_tasks=15,
+                note=lambda *_: None, active_only=True,
+            )
+        self.assertEqual(tasks, [{"id": "1001", "name": "A类-1", "state": "进行中"}])
+        self.assertEqual(rows, [day_row])
+
+
 class TestTasksFromDayRows(unittest.TestCase):
     """工单清单直接从按天数据里拿（省掉单独一次任务组查询）。"""
 
@@ -319,6 +364,38 @@ class TestSyncV2(unittest.TestCase):
         conn = repo.connect(v2_path)
         self.addCleanup(conn.close)
         self.assertEqual(conn.execute("SELECT scope FROM fetch_run").fetchone()[0], "today")
+
+    def test_offline_task_state_is_updated_without_storing_residual_metrics(self):
+        v2_path = os.path.join(self.tmp, "v2-offline.db")
+        self._seed(v2_path)
+        active_name = self.tasks[0]["name"]
+        offline_name = "示例活动-hang-A类 · 示例人群 A / 写作辅助工具-2"
+        tasks = [
+            {"id": "1001", "name": active_name, "state": "进行中"},
+            {"id": "1002", "name": offline_name, "state": "下线"},
+        ]
+        report = fp.sync_v2(
+            v2_path, "示例活动-hang", tasks,
+            [
+                ["2026-01-05", "1001", active_name, "进行中", 120, 1, 80, 1],
+                ["2026-01-05", "1002", offline_name, "下线", 50, 0, 30, 0],
+            ],
+            [["1001", active_name, "r1", "对照组",
+              "示例活动-hang-A类 · 对照", "120", "1"]],
+            "2026-01-05", "2026-01-05", "指定区间", "2026-01-05 10:00:00",
+        )
+        self.assertEqual(report["daily_metrics"], 1)
+        conn = repo.connect(v2_path)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM daily_metric").fetchone()[0], 1)
+        offline = conn.execute(
+            "SELECT task_state FROM bucket_batch WHERE task_id='1002'"
+        ).fetchone()
+        self.assertEqual(offline["task_state"], "下线")
+        fetch = conn.execute(
+            "SELECT total_exposure, total_click FROM fetch_run"
+        ).fetchone()
+        self.assertEqual((fetch["total_exposure"], fetch["total_click"]), (120, 1))
 
 
 if __name__ == "__main__":

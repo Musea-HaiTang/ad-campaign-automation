@@ -566,7 +566,9 @@
   }
 
   function thresholdRows() {
-    return BUCKETS.map(bucketThresholdItem);
+    return BUCKETS.filter(function (bucket) {
+      return bucket.thresholdEligible !== false;
+    }).map(bucketThresholdItem);
   }
 
   function updateThresholdButton() {

@@ -59,6 +59,17 @@ def _payload_batch_id(bucket_key, batch_no):
     return "%s:%d" % (bucket_key, batch_no)
 
 
+def _offline_buckets(conn, activity_id):
+    """当前批已经下线的桶；历史保留，但不再进入当前看板和统计。"""
+    rows = conn.execute(
+        "SELECT b.id, b.bucket_key FROM bucket b "
+        "JOIN v_bucket_current cur ON cur.bucket_id=b.id "
+        "WHERE b.activity_id=? AND cur.task_state='下线'",
+        (activity_id,),
+    ).fetchall()
+    return {row["id"] for row in rows}, {row["bucket_key"] for row in rows}
+
+
 def _activity(conn, activity_id):
     row = conn.execute("SELECT * FROM activity WHERE id=?", (activity_id,)).fetchone()
     if row is None:
@@ -148,11 +159,12 @@ def build_payload(conn, activity_id, today=None):
     """按现有看板结构从 v2 装配数据。"""
     today = today or datetime.date.today().isoformat()
     activity = _activity(conn, activity_id)
-    buckets = [dict(row) for row in conn.execute(
+    all_buckets = [dict(row) for row in conn.execute(
         "SELECT * FROM bucket WHERE activity_id=? ORDER BY id", (activity_id,)
     )]
-    if not buckets:
+    if not all_buckets:
         raise ValueError("活动没有桶：%s" % activity_id)
+    buckets = all_buckets
     colors = {
         bucket["bucket_key"]: BUCKET_COLORS[i % len(BUCKET_COLORS)]
         for i, bucket in enumerate(buckets)
@@ -344,6 +356,8 @@ def build_payload(conn, activity_id, today=None):
             "id": bucket["bucket_key"], "name": bucket["name"] if "name" in bucket else bucket["display_name"],
             "color": colors[bucket["bucket_key"]], "topic": bucket["topic"],
             "threshold": bucket["default_threshold_exposure"],
+            "currentTaskState": (current["task_state"] or "") if current else "",
+            "thresholdEligible": bool(current and current["task_state"] == "进行中"),
             "currentBatch": current_id, "refBatch": ref_id,
             "thresholdReading": ({
                 "batch": threshold_item["batch_no"],
@@ -418,8 +432,11 @@ def todo_rows(conn, activity_id):
         "SELECT * FROM v_review_due WHERE activity_id=? ORDER BY triggered_at",
         (activity_id,),
     ).fetchall()
+    _, offline_keys = _offline_buckets(conn, activity_id)
     out = []
     for row in rows:
+        if row["bucket_key"] in offline_keys:
+            continue
         passed = bool(row["total_exposure"] and
                       row["total_click"] / row["total_exposure"] >= PASS_CTR)
         batch = _payload_batch_id(row["bucket_key"], row["batch_no"])

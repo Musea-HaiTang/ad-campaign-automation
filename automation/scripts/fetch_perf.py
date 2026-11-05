@@ -99,11 +99,12 @@ def call(api, method, path, payload=None):
     return body.get("data")
 
 
-def query_tasks(api, task_group_name, day=None):
+def query_tasks(api, task_group_name, day=None, active_only=False):
     """查任务列表；给了 day 就是"那一天的业务发生时间"，不给就是任务组全量。"""
     body = {
         "id": "", "taskName": "", "userGroupId": "", "taskGroupId": "",
-        "taskGroupName": task_group_name, "channelId": [], "workStatus": "", "stage": "",
+        "taskGroupName": task_group_name, "channelId": [],
+        "workStatus": "1" if active_only else "", "stage": "",
         "createType": "", "channelType": "0",
         "needPage": 1, "pageNumber": 1, "pageSize": PAGE_SIZE,
     }
@@ -154,10 +155,10 @@ def tasks_to_read(tasks):
     return [t for t in tasks if t["state"] == "进行中"]
 
 
-def fetch_day_rows(api, task_group_name, day):
+def fetch_day_rows(api, task_group_name, day, active_only=False):
     """某一天的工单级数据；那天没数据就返回空表。"""
     rows = []
-    for t in query_tasks(api, task_group_name, day):
+    for t in query_tasks(api, task_group_name, day, active_only=active_only):
         rows.append([day, str(t.get("id", "")), t.get("taskName") or "",
                      status_text(t.get("workStatus")), t.get("exposure", ""),
                      t.get("click", ""), t.get("loginExposure", ""), t.get("loginClick", "")])
@@ -216,7 +217,16 @@ def sync_v2(v2_db_path, activity_key, tasks, day_rows, res_rows,
         activity = workspace_repo.get_activity(conn, activity_key)
         if activity is None:
             raise RuntimeError("数据库里没有活动：%s" % activity_key)
-        all_days = sorted({row[0] for row in day_rows if row[0]})
+        active_task_ids = {
+            str(task["id"]) for task in tasks if task.get("state") == "进行中"
+        }
+        stored_day_rows = [
+            row for row in day_rows if str(row[1]) in active_task_ids
+        ]
+        stored_res_rows = [
+            row for row in res_rows if str(row[0]) in active_task_ids
+        ]
+        all_days = sorted({row[0] for row in stored_day_rows if row[0]})
         started_on = all_days[0] if all_days else start
         buckets = {
             bucket["bucket_key"]: bucket
@@ -234,8 +244,8 @@ def sync_v2(v2_db_path, activity_key, tasks, day_rows, res_rows,
                 "requested_to, started_at, finished_at, status, returned_days, "
                 "total_exposure, total_click) VALUES(?,?,?,?,?,?,?,'ok',?,?,?)",
                 (activity["id"], scope, "system", start, end, fetched_at, fetched_at,
-                 len(all_days), sum(_int(r[4]) for r in day_rows),
-                 sum(_int(r[5]) for r in day_rows)),
+                 len(all_days), sum(_int(r[4]) for r in stored_day_rows),
+                 sum(_int(r[5]) for r in stored_day_rows)),
             )
         fetch_id = cur.lastrowid
 
@@ -283,7 +293,7 @@ def sync_v2(v2_db_path, activity_key, tasks, day_rows, res_rows,
             batch_by_task[task_id] = row
 
         creative_by_key = {}
-        for row in res_rows:
+        for row in stored_res_rows:
             task_id = str(row[0])
             batch = batch_by_task.get(task_id)
             if batch is None:
@@ -314,7 +324,7 @@ def sync_v2(v2_db_path, activity_key, tasks, day_rows, res_rows,
                 )
             creative_by_key[(task_id, resource_id or resource_name)] = creative
 
-        for row in day_rows:
+        for row in stored_day_rows:
             task_id = str(row[1])
             batch = batch_by_task.get(task_id)
             if batch is None:
@@ -324,7 +334,7 @@ def sync_v2(v2_db_path, activity_key, tasks, day_rows, res_rows,
                 _int(row[6]), _int(row[7]), fetch_id,
             )
 
-        for row in res_rows:
+        for row in stored_res_rows:
             task_id = str(row[0])
             batch = batch_by_task[task_id]
             resource_id = str(row[2] or "")
@@ -345,8 +355,8 @@ def sync_v2(v2_db_path, activity_key, tasks, day_rows, res_rows,
         return {
             "activity_id": activity["id"],
             "fetch_run_id": fetch_id,
-            "daily_metrics": len(day_rows),
-            "resource_readings": len(res_rows),
+            "daily_metrics": len(stored_day_rows),
+            "resource_readings": len(stored_res_rows),
         }
     finally:
         conn.close()
@@ -501,8 +511,12 @@ class Browser:
         self.close()
 
 
-def collect(ctx, task_group, days, known_tasks=0, note=log, single_res=None):
+def collect(ctx, task_group, days, known_tasks=0, note=log, single_res=None,
+            active_only=False):
     """取数（**网络部分**，不落盘）：按天逐日查 + 资源级只查在投的工单。
+
+    `active_only=True` 只用于今天实时刷新：后台查询直接限定进行中，
+    不下发下线工单，也不在空结果时补查任务组全量。
 
     返回 (tasks, day_rows, res_rows, empty_days)。落库/落流水在 `persist()`。
     """
@@ -510,7 +524,7 @@ def collect(ctx, task_group, days, known_tasks=0, note=log, single_res=None):
     note("1/3 按天取数（%d 天，一天一次查询）…" % len(days))
     day_rows, empty_days = [], []
     for i, day in enumerate(days, start=1):
-        rows = fetch_day_rows(api, task_group, day)
+        rows = fetch_day_rows(api, task_group, day, active_only=active_only)
         if rows:
             day_rows.extend(rows)
             note("      [%d/%d] %s：%d 个任务" % (i, len(days), day, len(rows)))
@@ -521,7 +535,10 @@ def collect(ctx, task_group, days, known_tasks=0, note=log, single_res=None):
     # 工单清单就来自按天数据（同一批接口、同样的字段），不用再单独查一次任务组；
     # 只有「按天返回的工单比库里知道的少」（如补历史那天还没建的工单）才补查全量。
     tasks = tasks_from_day_rows(day_rows)
-    if len(tasks) < known_tasks:
+    if not tasks and active_only:
+        note("      今天没有进行中的工单，本次无需取数")
+        return [], [], [], empty_days
+    if not active_only and len(tasks) < known_tasks:
         note("      按天只返回 %d 个工单（库里已知 %d 个）→ 补查任务组全量 …"
              % (len(tasks), known_tasks))
         tasks = group_tasks(api, task_group)
@@ -603,15 +620,19 @@ def run(activity_key, v2_db_path=None, date_from=None, date_to=None, label="",
         by = browser if browser is not None else Browser(headed=headed)
         by.start()                                              # 常驻的那只：没起就起、起着就复用
         try:
+            active_only = start == end == today
             tasks, day_rows, res_rows, empty_days = collect(
                 by.ctx, activity_key, days,
                 workspace_repo.count_bucket_batches(conn, activity["id"]), note,
-                single_res=workspace_repo.single_resource_map(conn, activity["id"]))
+                single_res=workspace_repo.single_resource_map(conn, activity["id"]),
+                active_only=active_only)
         finally:
             if own:
                 by.close()
 
         if not day_rows:
+            if active_only:
+                return "无进行中工单，本次未取数"
             raise RuntimeError("区间内所有日期都没有数据（%s ~ %s）" % (start, end))
 
         persist(v2_db_path, activity_key, tasks, day_rows, res_rows, start, end,
