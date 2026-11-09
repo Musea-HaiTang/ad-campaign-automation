@@ -1,0 +1,98 @@
+# 真实有头彩排配置：只用于 run_ads.py / run_taskorder.py 的 dry-run。
+# campaign.rehearsal: true 会阻止所有 --submit 提交。
+version: 1
+adType: blog-page-t0
+label: 腾讯云产品-hang-彩排
+controls:
+  channelType: 页面类
+  channel: PC博客详情页-新模版-T0
+  materialPath:
+  - 动态广告
+  - 其它
+  username: lihang1
+  defaults:
+    businessLine: 企业服务事业部
+    isPopup: false
+    adClient: 广告
+    closeBtnColor: 浅色
+  fields:
+    link:
+      placeholder: 请输入URL解析
+    title:
+      placeholder: 解析自动生成标题
+    username:
+      placeholder: 解析自动生成用户名
+    summary:
+      placeholder: 解析自动生成描述
+      type: textarea
+campaign:
+  brand: 腾讯云产品
+  owner: hang
+  namePrefix: 腾讯云产品-hang
+  taskGroupName: 腾讯云产品-hang
+  activityLink: https://partner.cloud.tencent.com/invitation/10003541998365ba1b6492d43/100053686121?inviteType=2&jump=https://cloud.tencent.com/product/workbuddy-enterprise
+  rehearsal: true
+audiences:
+- id: WorkBuddy企业版
+  nameSuffix: '-10'
+  reviewThresholdExposure: 3000
+  topic: WorkBuddy 企业版（腾讯企业智能体）
+  target: 企业里的研发团队
+  taskName: 腾讯云产品-hang-WorkBuddy企业版
+  subBusinessLine: 训练营与大赛
+  distributionList: 腾讯云产品-hang-WorkBuddy企业版
+  keywordGroup:
+    keywords: CodeBuddy,WorkBuddy,企业智能体
+  abTest: true
+  resources:
+  - role: control
+    name: 腾讯云产品-hang-WorkBuddy企业版 · 对照-10
+    title: 彩排对照标题
+    summary: 仅用于验证资源表单填写和回读，不会创建资源。
+    angleKey: rehearsal-control
+    presentationType: direct_marketing
+    styleKey: regular
+    validationSlot: first_test
+  - role: experiment1
+    name: 腾讯云产品-hang-WorkBuddy企业版 · 实验1-10
+    title: 彩排实验1标题
+    summary: 仅用于验证第二条资源表单。
+    angleKey: rehearsal-exp1
+    presentationType: disguised_post
+    styleKey: adaptation
+    validationSlot: first_test
+  - role: experiment2
+    name: 腾讯云产品-hang-WorkBuddy企业版 · 实验2-10
+    title: 彩排实验2标题
+    summary: 仅用于验证第三条资源表单。
+    angleKey: rehearsal-exp2
+    presentationType: direct_marketing
+    styleKey: antithesis
+    validationSlot: first_test
+  abGroups:
+  - label: 对照组
+    resource: 腾讯云产品-hang-WorkBuddy企业版 · 对照-10
+    weightPct: 34
+  - label: 实验组1
+    resource: 腾讯云产品-hang-WorkBuddy企业版 · 实验1-10
+    weightPct: 33
+  - label: 实验组2
+    resource: 腾讯云产品-hang-WorkBuddy企业版 · 实验2-10
+    weightPct: 33
+taskOrder:
+  businessLine: 企业服务事业部
+  taskGroup: 腾讯云产品-hang
+  taskName: 腾讯云产品-hang-WorkBuddy企业版-10
+  channel: PC博客详情页-新模版-T0
+  channelSizeId: 后台点渠道自动带上
+  price: 30
+  deliveryDate:
+    mode: set_time
+    start: '2026-11-10'
+    end: '2026-11-20'
+    timeStart: 8
+    timeEnd: 23
+  exposureCaps:
+    daily: 100000
+    weekly: 500000
+    total: 500000

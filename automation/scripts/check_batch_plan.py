@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")   # 控制台别乱码（跟 judge_batch / fetch_perf 一致）
 
 import naming  # noqa: E402
+import campaign  # noqa: E402
 
 LABELS = ["对照组", "实验组1", "实验组2"]
 ROLE_OF_LABEL = {"对照组": "对照", "实验组1": "实验1", "实验组2": "实验2"}
@@ -44,7 +45,7 @@ def role_of(name):
 def check_audience(a, camp, ab_test=True, require_suffix=True):
     """一个桶：返回错误列表（空 = 过）。
 
-    `ab_test=False`（`taskOrder.abTest: false`，2026-10-12 加）= **单资源长期单**：
+    `ab_test=False`（桶级 `audiences[].abTest: false` 或全局 `taskOrder.abTest: false`）= **单资源工单**：
     后台那一步选「AB测试 = 否」，只挂一条资源、**没有流量占比**，所以位次 / 权重 / 角色段三条规则都不适用
     （勘察见 `automation/_tmp/_probe_no_ab.py`）。这时只要求「正好 1 条、且写了资源名」。
     """
@@ -54,9 +55,9 @@ def check_audience(a, camp, ab_test=True, require_suffix=True):
     if not abg:
         return ["%s 桶：abGroups 为空（工单的 AB 组没写，会回落到全局兜底）" % bid]
 
-    if not ab_test:                                # 单资源长期单：没有占比 / 位次的概念
+    if not ab_test:                                # 单资源工单：没有占比 / 位次的概念
         if len(abg) > 1:
-            errs.append("%s 桶：taskOrder.abTest=false（单资源）时 abGroups 只能写 1 条，现在是 %d 条"
+            errs.append("%s 桶：单资源模式时 abGroups 只能写 1 条，现在是 %d 条"
                         % (bid, len(abg)))
         if not str(abg[0].get("resource") or "").strip():
             errs.append("%s 桶：单资源那条没写 resource（后台「资源」是必填）" % bid)
@@ -142,8 +143,8 @@ def check_doc(d, require_suffix=True):
     camp = d["campaign"]
     t = d.get("taskOrder") or {}
     errs = check_task_order(t)
-    ab_test = t.get("abTest", True)
     for a in d.get("audiences") or []:
+        ab_test = campaign.resolve_ab_test(a, t)
         errs += check_audience(a, camp, ab_test, require_suffix)
     return errs
 
@@ -160,9 +161,9 @@ def main():
     require_suffix = os.path.basename(os.path.dirname(os.path.abspath(args.config))) == "批次"
     if not require_suffix:
         print("  （整活动 YAML · 首投：不校验 nameSuffix）")
-    ab_test = (d.get("taskOrder") or {}).get("abTest", True)
     for a in d.get("audiences") or []:
         abg = a.get("abGroups") or []
+        ab_test = campaign.resolve_ab_test(a, d.get("taskOrder") or {})
         if ab_test:
             print("  %s 桶：%d 条资源 ｜ 槽位 %s ｜ 占比 %s"
                   % (a.get("id"), len(abg), "/".join(g.get("label", "?") for g in abg),

@@ -26,6 +26,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bucket_runner  # noqa: E402
+import campaign  # noqa: E402
 import cli  # noqa: E402
 import csdn_ui as ui  # noqa: E402
 import execution_state as es  # noqa: E402
@@ -102,7 +103,7 @@ def payload_for(cfg, aud):
     return {
         "taskName": progress_key(cfg, aud),
         "subBusinessLine": aud["subBusinessLine"],
-        "abTest": t.get("abTest", True),
+        "abTest": campaign.resolve_ab_test(aud, t),
         "abGroups": aud.get("abGroups") or t.get("abGroups") or [],
         "distributionList": aud.get("distributionList") or t.get("distributionList") or "",
         "businessLine": t["businessLine"],
@@ -129,7 +130,7 @@ def enable_ab_test(form):
 
 
 def disable_ab_test(form):
-    """AB测试 = 否（**单资源长期单**，2026-10-12 按真机勘察加）。
+    """AB测试 = 否（**单资源工单**，2026-10-12 按真机勘察加）。
 
     后台默认就是「否」（探针 `_tmp/_probe_no_ab.py` 实测）：这种状态下 `资源信息` 块里不是三张 AB 卡片，
     而是一个**必填的单资源下拉** `.resource-row input[placeholder='请输入资源名称搜索']`，**没有流量占比**。
@@ -628,9 +629,8 @@ def run_bucket(s, cfg, aud):
     # AB 三组资源：**优先用本桶自己的**（audiences[].abGroups，每桶挂自己那 3 份）；
     # 本桶没写才回落到 taskOrder.abGroups（全活动共用一组资源）。
     groups = aud.get("abGroups") or t.get("abGroups") or []
-    # AB 测试开关（2026-10-12 加）：缺省 true = 老路（三组资源）；false = **单资源长期单**，
-    # 只挂 groups 的第一条、没有流量占比（后台那一步选「AB测试 = 否」）。
-    ab_test = t.get("abTest", True)
+    # AB 测试开关按桶解析：1 资源走单资源，2/3 资源走 AB；旧 YAML 仍可用 taskOrder.abTest 兜底。
+    ab_test = campaign.resolve_ab_test(aud, t)
     # 用户名单名：**正式跑不用写**——默认用本桶的客群名（＝圈选任务名；「一键创建分发名单」的
     # 产物名与它一致）。audiences[].distributionList / taskOrder.distributionList 写了就用写的值
     # （彩排时拿后台现成的测试名单验流程，就靠这个；逐桶写的优先）。

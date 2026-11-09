@@ -64,9 +64,10 @@
 | `taskName` | 单个字母桶为 `{namePrefix}-{id}类`；产品类桶为 `{namePrefix}-{id}`，不加「类」 |
 | `subBusinessLine` | 建资源时选择的子业务线 |
 | `keywordGroup.keywords` | 客群圈选关键词，英文逗号分隔 |
-| `resources` | 本桶本轮新建的资源；可以是空列表 |
-| `abGroups` | 本桶 AB 三组；不写时回落到 `taskOrder.abGroups` |
+| `resources` | 本桶本轮新建的 1～3 个资源，默认 3；空列表表示复用已有资源 |
+| `abGroups` | 本桶资源分组；1 条为单资源对照组，2/3 条为 AB 组；不写时回落到 `taskOrder.abGroups` |
 | `distributionList` | 本桶用户名单；依次回落到 `taskOrder.distributionList`、本桶客群名 |
+| `abTest` | 可选的桶级 AB 模式；覆盖 `taskOrder.abTest`，用于混合 1/2/3 资源桶 |
 | `clickThreshold` | 圈选「点击需≥」，默认 `0` |
 | `exposureThreshold` | 圈选「曝光需≥」，默认 `1` |
 | `reviewThresholdExposure` | 自动复盘门槛；缺省时沿用数据库值，首次登记默认 `3000` |
@@ -149,26 +150,31 @@ AB 资源和用户名单必须逐桶对应：工单应挂本桶资源、用本�
 | `taskName` | 通常不填；脚本按桶派生：字母桶为 `{bucket.taskName} · {topic}`，产品桶为 `{bucket.taskName}` |
 | `channel` | 渠道，如 `PC博客详情页-新模版-T0` |
 | `channelSizeId` | 渠道尺寸/ID，用于核对；选择渠道时后台自动带上 |
-| `abGroups` | 全局兜底，结构为 `[{label, resource, weightPct}]` |
-| `abTest` | 默认 `true`；`false` 表示单资源长期单 |
+| `abGroups` | 全局兜底，结构为 `[{label, resource, weightPct}]`；单资源模式不填权重 |
+| `abTest` | 全局兜底；`true` = AB，`false` = 单资源。桶级 `audiences[].abTest` 优先 |
 | `price` | 当期计费价格，必须由用户提供 |
 | `deliveryDate` | `{mode: set_time, start, end}` |
 | `distributionList` | 全局兜底名单；最终可回落到客群名 |
 | `exposureCaps` | 每日/每周/总曝光上限 |
+
+`gen_yaml.py` 会按每个桶的 `copies` 数量解析 AB 模式：1 条为 `false`，2/3 条为 `true`，
+并把结果写入该桶的 `audiences[].abTest`。`taskOrder.abTest` 只作为旧 YAML 的全局兜底。
+解析优先级为：桶级 `audiences[].abTest` → `taskOrder.abTest` → 按 `resources` / `abGroups` 数量推导。
 
 执行依赖顺序：任务组 → 资源 → 客群 → 分发名单 → 任务工单。`distributionList` 填真实名单名，
 不要带后台显示的「… 用户名」后缀。
 
 ### AB 组规则
 
-- 权重按资源条数计算：3 条为 `34/33/33`，2 条为 `50/50`，总和必须为 100。
+- 权重按资源条数计算：3 条为 `34/33/33`，2 条为 `50/50`，总和必须为 100；1 条是单资源模式，不填权重。
 - 槽位必须从前往后填满：2 条资源只能使用「对照组 + 实验组1」。
 - 资源名的角色段必须与 AB 槽位一致。
 - 生成后运行 `automation/scripts/check_batch_plan.py --config <批次 YAML>`，再跑 `run_ads` 或 `run_taskorder`。
 
 `abTest: false` 时，工单选择「AB 测试 = 否」，只挂 `abGroups` 的第一条资源，没有流量占比。
-此时 `resources` 写空列表，`abGroups` 只写 1 条；权重、槽位和角色段规则均不适用，但必须正好
-有 1 条资源且填写资源名。详细跑法见 `automation/docs/run_taskorder.md`。
+新建单资源工单时，`resources` 写 1 条、`abGroups` 写 1 条；复用已有资源时，`resources` 可以写空列表，
+但必须提供 1 条 `abGroups`。生成器会按 1 份 `copies` 自动派生对照组；多份 `copies` 又没手写
+`abGroups` 则拒绝生成。详细跑法见 `automation/docs/run_taskorder.md`。
 
 ## 圈选口径
 

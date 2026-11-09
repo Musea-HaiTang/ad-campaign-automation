@@ -120,6 +120,11 @@ class ContextTest(unittest.TestCase):
             cli.open_progress(str(self.act), "broken.json", strict=True)
         self.assertEqual(e.exception.code, 2)
 
+    def test_彩排配置禁止正式提交(self):
+        with mock.patch.object(cli.campaign, "is_rehearsal", return_value=True):
+            with self.assertRaisesRegex(SystemExit, "彩排配置"):
+                cli.context(mkargs(submit=True), shots="ads_shots")
+
 
 class SessionTest(unittest.TestCase):
     def test_会话参数由外壳定(self):

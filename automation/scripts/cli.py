@@ -122,6 +122,8 @@ def context(args, *, shots, progress=None):
               拿到 ctx 后自己调 `open_progress(ctx.act_dir, name, reset=...)` 塞回 `ctx.progress`。
     """
     cfg = campaign.load_or_exit(args.config)
+    if getattr(args, "submit", False) and campaign.is_rehearsal(cfg):
+        raise SystemExit("这是彩排配置（campaign.rehearsal: true），禁止使用 --submit。")
     act_dir = campaign.activity_dir(args.config)
     shot_dir = os.path.join(act_dir, "日志", shots)
     only = only_buckets(getattr(args, "only", ""), cfg["audiences"])

@@ -9,6 +9,7 @@
 """
 import pathlib
 import json
+from copy import deepcopy
 import sys
 import unittest
 from unittest import mock
@@ -94,6 +95,24 @@ class DeriveAbGroupsTest(unittest.TestCase):
         self.assertEqual(gen_yaml.derive_ab_groups(one), [])
         self.assertEqual(gen_yaml.derive_ab_groups([]), [])
 
+    def test_单资源模式_一条资源自动派生对照组(self):
+        d = fake_def(1)
+        d["taskOrder"]["abTest"] = False
+        y = build(d)
+        groups = y["audiences"][0]["abGroups"]
+        self.assertEqual(groups, [{
+            "label": "对照组",
+            "resource": y["audiences"][0]["resources"][0]["name"],
+        }])
+        self.assertNotIn("weightPct", groups[0])
+        self.assertEqual(gen_yaml.campaign.validate(y), [])
+
+    def test_单资源模式_多条资源且未手写分组时拒绝生成(self):
+        d = fake_def(2)
+        d["taskOrder"]["abTest"] = False
+        with self.assertRaisesRegex(SystemExit, "copies 不是正好 1 份"):
+            build(d)
+
     def test_首投生成的_abGroups_名字必须等于_resources_名字(self):
         y = build(fake_def(3))
         aud = y["audiences"][0]
@@ -112,6 +131,35 @@ class DeriveAbGroupsTest(unittest.TestCase):
                 {"label": "实验组2", "resource": "老资源 · 实验2", "weightPct": 33}]
         y = build(fake_def(0, abgroups=hand))
         self.assertEqual(y["audiences"][0]["abGroups"], hand)
+
+    def test_单资源开关原样带入执行YAML(self):
+        hand = [{"label": "对照组", "resource": "老资源 · 对照"}]
+        d = fake_def(1, abgroups=hand)
+        d["taskOrder"]["abTest"] = False
+        y = build(d)
+        self.assertIs(y["taskOrder"]["abTest"], False)
+        self.assertEqual(gen_yaml.campaign.validate(y), [])
+
+    def test_混合资源桶逐桶推导AB模式(self):
+        d = fake_def(3)
+        single = deepcopy(d["buckets"][0])
+        single["id"] = "B"
+        single["name"] = "B 桶"
+        single["audience"] = "单资源人群"
+        single["topic"] = "单资源主题"
+        single["copies"] = single["copies"][:1]
+        d["buckets"].append(single)
+
+        y = build(d)
+        multi, one = y["audiences"]
+        self.assertIs(multi["abTest"], True)
+        self.assertEqual(len(multi["abGroups"]), 3)
+        self.assertIs(one["abTest"], False)
+        self.assertEqual(one["abGroups"], [{
+            "label": "对照组",
+            "resource": one["resources"][0]["name"],
+        }])
+        self.assertEqual(gen_yaml.campaign.validate(y), [])
 
     def test_新文案缺分类字段时拒绝生成(self):
         d = fake_def(2)

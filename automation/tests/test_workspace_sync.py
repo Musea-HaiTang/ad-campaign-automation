@@ -142,6 +142,27 @@ class WorkspaceSyncTest(unittest.TestCase):
             [tuple(row) for row in old_rows],
         )
 
+    def test_单资源桶写入single槽位和100占比(self):
+        cfg = deepcopy(self.cfg)
+        audience = cfg["audiences"][0]
+        audience["abTest"] = False
+        audience["resources"] = audience["resources"][:1]
+        audience["abGroups"] = [{
+            "label": "对照组",
+            "resource": audience["resources"][0]["name"],
+        }]
+        result = workspace_sync.sync_config_batch(
+            self.db_path, cfg, [audience], "2026-01-05", status="running",
+        )
+
+        conn = repo.connect(self.db_path)
+        self.addCleanup(conn.close)
+        row = conn.execute(
+            "SELECT slot, weight_pct FROM creative WHERE batch_id=?",
+            (result["batch_ids"][0],),
+        ).fetchone()
+        self.assertEqual(tuple(row), ("single", 100))
+
     def test_数据库同步中途失败会整批回滚(self):
         audience = self.cfg["audiences"][0]
         with mock.patch.object(repo, "save_creative",

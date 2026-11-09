@@ -92,10 +92,8 @@ class DocsConsistencyTest(unittest.TestCase):
         self.assertTrue((ROOT / "scripts" / "setup_ai.py").is_file())
         self.assertTrue((ROOT / "scripts" / "verify_tests.py").is_file())
 
-    def test_发布脚本使用统一测试入口(self):
-        script = (ROOT / "scripts" / "push_github.ps1").read_text(encoding="utf-8")
-        self.assertIn(r"scripts\verify_tests.py", script)
-        self.assertNotIn("-m pytest", script)
+    def test_不再保留独立发布脚本(self):
+        self.assertFalse((ROOT / "scripts" / "push_github.ps1").exists())
 
     def test_关键运维文档存在(self):
         required = (

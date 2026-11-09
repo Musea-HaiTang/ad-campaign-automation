@@ -19,7 +19,7 @@ import yaml
 # ---------- 契约：各层的字段白名单 ----------
 TOP = {"version", "adType", "label", "controls", "campaign", "audiences", "taskOrder"}
 CAMPAIGN = {"brand", "owner", "namePrefix", "phase", "taskGroupName", "activityLink",
-            "status", "endedAt"}
+            "status", "endedAt", "rehearsal"}
 CAMPAIGN_STATUSES = {"active", "ended"}
 CONTROLS = {"channelType", "channel", "materialPath", "defaults", "fields", "username"}
 CONTROLS_DEFAULTS = {"businessLine", "isPopup", "adClient", "closeBtnColor"}
@@ -29,7 +29,7 @@ REQUIRED_FIELDS = {"title", "summary", "link"}
 AUDIENCE = {"id", "topic", "target", "taskName", "subBusinessLine", "keywordGroup",
             "resources", "clickThreshold", "exposureThreshold",
             "reviewThresholdExposure",
-            "abGroups", "distributionList", "nameSuffix"}   # 逐桶覆盖：工单挂本桶的 3 资源 / 本桶的用户名单 / 重投名字后缀（-2）
+            "abGroups", "abTest", "distributionList", "nameSuffix"}
 KEYWORD_GROUP = {"keywords"}
 PRESENTATION_TYPES = {"disguised_post", "direct_marketing"}
 STYLE_KEYS = {"regular", "antithesis", "adaptation", "poetry_reference"}
@@ -39,8 +39,8 @@ RESOURCE = {
     "angleKey", "presentationType", "styleKey", "validationSlot",
 }
 LEGACY_RESOURCE = {"highlight"}  # 历史 YAML 仍可装载，但运行时忽略
-# abTest（2026-10-12 加）：true / 缺省 = 老路（AB测试=是，逐组挂资源）；
-#   false = **单资源长期单**（AB测试=否，只挂 abGroups 的第一条、没有流量占比）——D 桶转长期单用。
+# abTest（2026-10-12 加）：true = AB测试=是；false = 单资源、不跑 AB。
+# 每个桶可以单独覆盖 taskOrder.abTest，支持同一活动里混合 1 / 2 / 3 资源。
 TASK_ORDER = {"businessLine", "taskGroup", "taskName", "channel", "channelSizeId", "abGroups",
               "abTest", "price", "deliveryDate", "distributionList", "exposureCaps"}
 DELIVERY_DATE = {"mode", "start", "end", "timeStart", "timeEnd"}
@@ -85,6 +85,25 @@ class _Errs:
         return True
 
 
+def resolve_ab_test(audience, task_order):
+    """解析一个桶的 AB 模式：桶级优先，其次全局兜底，最后按资源数推导。"""
+    audience = audience or {}
+    task_order = task_order or {}
+    if "abTest" in audience:
+        return audience["abTest"]
+    if "abTest" in task_order:
+        return task_order["abTest"]
+    groups = audience.get("abGroups") or task_order.get("abGroups") or []
+    resources = audience.get("resources") or []
+    count = len(resources) or len(groups)
+    return count != 1
+
+
+def is_rehearsal(cfg):
+    """彩排配置禁止进入真实提交路径。"""
+    return bool((cfg.get("campaign") or {}).get("rehearsal", False))
+
+
 def validate(data):
     """只检查不改数据，返回问题清单（空列表 = 合格）。"""
     e = _Errs()
@@ -110,6 +129,8 @@ def validate(data):
             date.fromisoformat(str(ended_at))
         except ValueError:
             e.add("campaign.endedAt 要写成 YYYY-MM-DD，实际是 %r" % ended_at)
+    if "rehearsal" in camp and not isinstance(camp["rehearsal"], bool):
+        e.add("campaign.rehearsal 必须是 true / false")
 
     ctrl = data.get("controls")
     if not isinstance(ctrl, dict):
@@ -144,6 +165,8 @@ def validate(data):
         e.keys(p, a, AUDIENCE)
         for k in ("id", "subBusinessLine"):
             e.need(p, a, k)
+        if "abTest" in (a or {}) and not isinstance(a["abTest"], bool):
+            e.add("%s.abTest 必须是 true / false" % p)
         review_threshold = (a or {}).get("reviewThresholdExposure")
         if review_threshold is not None:
             try:
@@ -161,6 +184,8 @@ def validate(data):
             # （2026-09-29：E 桶「3 条全留、0 条新写」的第一个实例，见 调整/2026-09-29-七批.yaml）
             e.add("%s.resources 要写成列表（空列表 = 本桶本轮没有新建资源）" % p)
             res = []
+        if len(res) > 3:
+            e.add("%s.resources 最多 3 条，当前是 %d 条" % (p, len(res)))
         for j, r in enumerate(res):
             rp = "%s.resources[%d]" % (p, j)
             e.keys(rp, r, RESOURCE | LEGACY_RESOURCE)
@@ -208,6 +233,23 @@ def validate(data):
     else:
         for j, g in enumerate(groups):
             e.keys("taskOrder.abGroups[%d]" % j, g, AB_GROUP)
+
+    for i, a in enumerate(auds):
+        p = "audiences[%d]" % i
+        a = a or {}
+        mode = resolve_ab_test(a, t)
+        own_resources = a.get("resources") or []
+        own_groups = a.get("abGroups") or t.get("abGroups") or []
+        if mode is True:
+            if len(own_resources) == 1 or len(own_groups) == 1:
+                e.add("%s 只有 1 个资源，必须使用 abTest: false（AB测试=否）" % p)
+            elif own_groups and len(own_groups) not in (2, 3):
+                e.add("%s 的 abGroups 只能是 2 或 3 组（AB测试=是）" % p)
+        elif mode is False:
+            if len(own_resources) > 1:
+                e.add("%s 配置了 abTest: false，但 resources 有 %d 条" % (p, len(own_resources)))
+            if len(own_groups) > 1:
+                e.add("%s 配置了 abTest: false，但 abGroups 有 %d 条" % (p, len(own_groups)))
     caps = t.get("exposureCaps")
     if caps is not None:
         e.keys("taskOrder.exposureCaps", caps, set(DEFAULTS["exposureCaps"]))
@@ -225,6 +267,8 @@ def apply_defaults(data):
                     sub.setdefault(kk, vv)
         else:
             t.setdefault(k, v)
+    for a in data.get("audiences") or []:
+        a.setdefault("abTest", resolve_ab_test(a, t))
     return data
 
 

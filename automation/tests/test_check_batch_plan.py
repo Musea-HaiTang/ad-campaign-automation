@@ -17,15 +17,18 @@ import check_batch_plan as cbp  # noqa: E402
 CAMP = {"namePrefix": "测试活动-hang"}
 
 
-def aud(bid="D", n=2, labels=None, weights=None, names=None):
+def aud(bid="D", n=2, labels=None, weights=None, names=None, ab_test=None):
     labels = labels or cbp.LABELS[:n]
     weights = weights or cbp.WEIGHTS[n]
     names = names or ["测试活动-hang-%s类 · %s-9" % (bid, cbp.ROLE_OF_LABEL[l]) for l in labels]
-    return {"id": bid, "taskName": "测试活动-hang-%s类" % bid, "nameSuffix": "-9",
+    item = {"id": bid, "taskName": "测试活动-hang-%s类" % bid, "nameSuffix": "-9",
             "resources": [{"role": {"对照": "control", "实验1": "experiment1", "实验2": "experiment2"}[
                 cbp.ROLE_OF_LABEL[l]], "name": names[i]} for i, l in enumerate(labels)],
             "abGroups": [{"label": l, "resource": names[i], "weightPct": weights[i]}
                          for i, l in enumerate(labels)]}
+    if ab_test is not None:
+        item["abTest"] = ab_test
+    return item
 
 
 class CheckBatchPlanTest(unittest.TestCase):
@@ -75,6 +78,25 @@ class CheckBatchPlanTest(unittest.TestCase):
         self.assertEqual(cbp.check_audience(a, CAMP, ab_test=False), [])
         two = aud(n=2)
         self.assertTrue(any("只能写 1 条" in e for e in cbp.check_audience(two, CAMP, ab_test=False)))
+
+    def test_混合桶逐桶解析AB模式(self):
+        one = aud(bid="A", n=1, labels=["对照组"], weights=[None], ab_test=False)
+        three = aud(bid="B", n=3, ab_test=True)
+        doc = {
+            "campaign": CAMP,
+            "audiences": [one, three],
+            "taskOrder": {
+                "price": 30,
+                "taskGroup": "T",
+                "deliveryDate": {
+                    "start": "2026-10-08",
+                    "end": "2026-10-12",
+                    "timeStart": 8,
+                    "timeEnd": 23,
+                },
+            },
+        }
+        self.assertEqual(cbp.check_doc(doc), [])
 
     def test_真实批次文件全过(self):
         """仓库里这两批（2026-10-08）当时跑过一次后台，必须是干净的。"""

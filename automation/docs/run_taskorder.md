@@ -1,7 +1,7 @@
 # 建任务工单 · `run_taskorder.py`（执行层第 4 步）
 
 > **管什么**：这个脚本怎么跑、在后台点哪些控件、只有它才会踩的坑。
-> **不管什么**：`taskOrder` 字段怎么填 → [`../campaigns/README.md`](../campaigns/README.md) §taskOrder（含「AB 组三条硬规则」与单资源长期单）；排队 / 断点 / 止损 / 回读口径 → [`../README.md`](../README.md)「设计原则」；这一步在整条链上的位置 → [`执行层全流程.md`](执行层全流程.md)。
+> **不管什么**：`taskOrder` 字段怎么填 → [`../campaigns/README.md`](../campaigns/README.md) §taskOrder（含「AB 组三条硬规则」与单资源工单）；排队 / 断点 / 止损 / 回读口径 → [`../README.md`](../README.md)「设计原则」；这一步在整条链上的位置 → [`执行层全流程.md`](执行层全流程.md)。
 > **谁什么时候读**：建任务工单前——每个进批的桶 1 条。
 
 ## 开工前
@@ -29,7 +29,7 @@
 # 建完后把新桶批次同步到 v2（task_id 可由下一次取数补全）
 ... --v2-db 别的.db             # 只在测试/排障时覆盖默认数据库
 
-# 单资源长期单（YAML 里 taskOrder.abTest: false）：同一个命令，脚本自己走「AB测试 = 否」
+# 单资源工单（YAML 里该桶 abTest: false）：同一个命令，脚本自己走「AB测试 = 否」
 ... --config "<当前执行 YAML>" --submit
 
 --headed                                           # 想看窗口
@@ -88,7 +88,7 @@
 - **任务组 / 用户名单选项极多**（任务组 337 项）：先搜再选（`csdn_ui.search_select`）。
 - **AB 资源 / 用户名单的搜索框是 `readonly`**：点外层容器打开 → `page.keyboard.insert_text` 输入（CJK 也能输）→ 点下拉项。
 - **多选下拉（分发名单）选完不会自动收**：用 `csdn_ui.close_dropdown()` 点弹窗正文左上角空白收起。别点标题栏（被浮层盖住会超时），也别按 Tab（会把下拉又打开）。
-- **单资源长期单（`abTest: false`）是另一套控件**：`资源信息` 块里**不是**三张 `.abtest-resource-item` 卡片，而是 `.resource-row` 里的一个必填下拉（`请输入资源名称搜索`），**且没有流量占比**。这个模式下别找卡片、别填权重。
+- **单资源工单（桶级或全局 `abTest: false`）是另一套控件**：`资源信息` 块里**不是**三张 `.abtest-resource-item` 卡片，而是 `.resource-row` 里的一个必填下拉（`请输入资源名称搜索`），**且没有流量占比**。这个模式下别找卡片、别填权重。
 - **权重 / AB 位次 / 名字角色段三条硬规则**（2 资源桶 50/50、位次不能跳、名字角色段要对上槽位）见 [`../campaigns/README.md`](../campaigns/README.md) §「AB 组三条硬规则」；生成后先跑 [`check_batch_plan.py`](check_batch_plan.md) 挡掉。
 - `goto` 用 `domcontentloaded`（`networkidle` 会被 SPA 长连接卡住）；运行加 `python -u` 看实时输出。
 - **页面失活**：新页先做页面级探针；`Page.goto` 或探针超时会在尚未提交的前提下重启公共浏览器并重试一次。运行日志落 `activities/{活动}/日志/runs/`。

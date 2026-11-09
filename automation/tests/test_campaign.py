@@ -85,6 +85,7 @@ class CampaignTest(unittest.TestCase):
     def test_合格数据能装载并补默认值(self):
         d = campaign.load(self.write(good()))
         self.assertEqual(d["taskOrder"]["price"], 25)          # 价格是必填、按写的值来
+        self.assertIs(d["audiences"][0]["abTest"], False)      # 1 资源自动走单资源模式
         self.assertEqual(d["taskOrder"]["exposureCaps"],
                          {"daily": 100000, "weekly": 500000, "total": 500000})
         self.assertEqual(d["taskOrder"]["deliveryDate"]["mode"], "set_time")
@@ -195,6 +196,25 @@ class CampaignTest(unittest.TestCase):
         resource = d0["audiences"][0]["resources"][0]
         for key in ("angleKey", "presentationType", "styleKey", "validationSlot"):
             resource.pop(key)
+        self.assertEqual(campaign.validate(d0), [])
+
+    def test_单资源桶不能打开AB模式(self):
+        d0 = good()
+        d0["audiences"][0]["abTest"] = True
+        errs = campaign.validate(d0)
+        self.assertTrue(any("只有 1 个资源" in e for e in errs), errs)
+
+    def test_桶级AB模式可以覆盖全局兜底(self):
+        d0 = good()
+        d0["taskOrder"]["abTest"] = True
+        d0["audiences"][0]["abTest"] = False
+        self.assertEqual(campaign.validate(d0), [])
+
+    def test_彩排标记必须是布尔值(self):
+        d0 = good()
+        d0["campaign"]["rehearsal"] = "yes"
+        self.assertTrue(any("campaign.rehearsal" in e for e in campaign.validate(d0)))
+        d0["campaign"]["rehearsal"] = True
         self.assertEqual(campaign.validate(d0), [])
 
     def test_桶的resources可以是空列表(self):
