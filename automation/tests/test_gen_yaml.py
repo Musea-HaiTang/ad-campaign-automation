@@ -37,9 +37,15 @@ def fake_def(n_copies=3, abgroups=None):
         "reviewThresholdExposure": 3000,
         "kwNote": "测试",
         "copies": [
-            {"role": "control", "label": "对照", "title": "标题A", "summary": "摘要A"},
-            {"role": "experiment1", "label": "实验1", "title": "标题B", "summary": "摘要B"},
-            {"role": "experiment2", "label": "实验2", "title": "标题C", "summary": "摘要C"},
+            {"role": "control", "label": "对照", "title": "标题A", "summary": "摘要A",
+             "angleKey": "A-1", "presentationType": "direct_marketing",
+             "styleKey": "regular", "validationSlot": "first_test"},
+            {"role": "experiment1", "label": "实验1", "title": "标题B", "summary": "摘要B",
+             "angleKey": "A-2", "presentationType": "disguised_post",
+             "styleKey": "adaptation", "validationSlot": "first_test"},
+            {"role": "experiment2", "label": "实验2", "title": "标题C", "summary": "摘要C",
+             "angleKey": "A-3", "presentationType": "direct_marketing",
+             "styleKey": "antithesis", "validationSlot": "first_test"},
         ][:n_copies],
     }
     if abgroups is not None:
@@ -95,6 +101,10 @@ class DeriveAbGroupsTest(unittest.TestCase):
         self.assertEqual([r["name"] for r in aud["resources"]],
                          [g["resource"] for g in aud["abGroups"]])
         self.assertEqual([g["weightPct"] for g in aud["abGroups"]], [34, 33, 33])
+        self.assertEqual(aud["resources"][0]["angleKey"], "A-1")
+        self.assertEqual(aud["resources"][0]["presentationType"], "direct_marketing")
+        self.assertEqual(aud["resources"][0]["styleKey"], "regular")
+        self.assertEqual(aud["resources"][0]["validationSlot"], "first_test")
 
     def test_桶里手写了_abGroups_就用它_重投复用老资源(self):
         hand = [{"label": "对照组", "resource": "老资源 · 对照", "weightPct": 34},
@@ -102,6 +112,12 @@ class DeriveAbGroupsTest(unittest.TestCase):
                 {"label": "实验组2", "resource": "老资源 · 实验2", "weightPct": 33}]
         y = build(fake_def(0, abgroups=hand))
         self.assertEqual(y["audiences"][0]["abGroups"], hand)
+
+    def test_新文案缺分类字段时拒绝生成(self):
+        d = fake_def(2)
+        del d["buckets"][0]["copies"][0]["styleKey"]
+        with self.assertRaisesRegex(SystemExit, "styleKey"):
+            build(d)
 
     def test_生成器使用动态广告新控件(self):
         y = build(fake_def(3))

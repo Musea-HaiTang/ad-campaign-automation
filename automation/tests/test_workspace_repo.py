@@ -55,7 +55,12 @@ class WorkspaceRepoTest(unittest.TestCase):
             "schema_version",
         })
         self.assertEqual(self.conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
-        self.assertEqual(self.conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0], 5)
+        self.assertEqual(self.conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0], 6)
+        creative_columns = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(creative)").fetchall()
+        }
+        self.assertIn("presentation_type", creative_columns)
+        self.assertIn("validation_slot", creative_columns)
 
     def test_每个数据库版本都有升级与回滚说明(self):
         doc = (
@@ -99,6 +104,52 @@ class WorkspaceRepoTest(unittest.TestCase):
             snapshot.close()
         self.assertEqual(version, 4)
         self.assertNotIn("activity", tables)
+
+    def test_v5_creative_migrates_classification_columns(self):
+        path = os.path.join(self.tmp, "v5.db")
+        conn = sqlite3.connect(path)
+        conn.executescript("""
+            CREATE TABLE schema_version(
+              version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_version(version, applied_at)
+              VALUES(5, '2026-10-28');
+            CREATE TABLE creative (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              batch_id INTEGER NOT NULL,
+              resource_id TEXT,
+              resource_name TEXT NOT NULL DEFAULT '',
+              copy_id TEXT NOT NULL,
+              title TEXT NOT NULL,
+              summary TEXT NOT NULL,
+              highlight TEXT NOT NULL DEFAULT '',
+              angle_key TEXT NOT NULL DEFAULT '',
+              style_key TEXT NOT NULL DEFAULT '',
+              slot TEXT NOT NULL,
+              weight_pct INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              UNIQUE(batch_id, slot)
+            );
+            CREATE UNIQUE INDEX uq_creative_resource
+              ON creative(batch_id, resource_id) WHERE resource_id IS NOT NULL;
+        """)
+        conn.commit()
+        conn.close()
+
+        migrated = repo.connect(path)
+        try:
+            columns = {
+                row["name"] for row in migrated.execute(
+                    "PRAGMA table_info(creative)").fetchall()
+            }
+            version = migrated.execute(
+                "SELECT MAX(version) FROM schema_version").fetchone()[0]
+        finally:
+            migrated.close()
+
+        self.assertEqual(version, repo.SCHEMA_VERSION)
+        self.assertIn("presentation_type", columns)
+        self.assertIn("validation_slot", columns)
 
     def test_batch_numbers_are_independent_per_bucket(self):
         activity_id = self._activity()
@@ -267,10 +318,13 @@ class WorkspaceRepoTest(unittest.TestCase):
         second = repo.save_creative(
             self.conn, batch["id"], "r1", "A类 · 对照", "copy-1",
             "新标题", "新摘要", "angle", "regular", "control", 100, "running",
+            presentation_type="direct_marketing", validation_slot="first_test",
         )
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(second["resource_id"], "r1")
         self.assertEqual(second["title"], "新标题")
+        self.assertEqual(second["presentation_type"], "direct_marketing")
+        self.assertEqual(second["validation_slot"], "first_test")
 
     def test_review_is_unique_per_batch_and_due_list_is_actionable(self):
         activity_id = self._activity()

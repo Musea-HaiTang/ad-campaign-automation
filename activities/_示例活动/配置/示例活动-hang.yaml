@@ -46,14 +46,26 @@ audiences:
     name: 示例活动-hang-A类 · 对照
     title: 示例标题（对照）：同一人群只换文案
     summary: 示例摘要（对照）——同一个客群只换文案，才比得出哪句话有吸引力。
+    angleKey: A-场景痛点
+    presentationType: direct_marketing
+    styleKey: regular
+    validationSlot: first_test
   - role: experiment1
     name: 示例活动-hang-A类 · 实验1
     title: 示例标题（实验1）：换个角度说
     summary: 示例摘要（实验1）——同一个客群换一个角度说。
+    angleKey: A-工作流
+    presentationType: disguised_post
+    styleKey: adaptation
+    validationSlot: first_test
   - role: experiment2
     name: 示例活动-hang-A类 · 实验2
     title: 示例标题（实验2）
     summary: 示例摘要（实验2）
+    angleKey: A-成本
+    presentationType: direct_marketing
+    styleKey: antithesis
+    validationSlot: first_test
   abGroups:
   - label: 对照组
     resource: 示例活动-hang-A类 · 对照
@@ -78,10 +90,18 @@ audiences:
     name: 示例活动-hang-B类 · 对照
     title: 示例标题（B 桶对照）
     summary: 示例摘要（B 桶对照）——这个桶只挂 2 条资源，演示"2 资源桶"。
+    angleKey: B-处理速度
+    presentationType: disguised_post
+    styleKey: poetry_reference
+    validationSlot: first_test
   - role: experiment1
     name: 示例活动-hang-B类 · 实验1
     title: 示例标题（B 桶实验1）
     summary: 示例摘要（B 桶实验1）
+    angleKey: B-批量任务
+    presentationType: direct_marketing
+    styleKey: regular
+    validationSlot: first_test
   abGroups:
   - label: 对照组
     resource: 示例活动-hang-B类 · 对照

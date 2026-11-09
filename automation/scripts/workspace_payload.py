@@ -291,6 +291,10 @@ def build_payload(conn, activity_id, today=None):
                 "bucket": batch_by_id[batch_id]["bucket_key"],
                 "role": row["slot"],
                 "batch": batch_by_id[batch_id]["change_reason"],
+                "angleKey": row["angle_key"] or "",
+                "presentationType": row["presentation_type"] or "",
+                "styleKey": row["style_key"] or "",
+                "validationSlot": row["validation_slot"] or "",
             })
 
     batch_judge = {}
@@ -332,6 +336,10 @@ def build_payload(conn, activity_id, today=None):
                 "e": reading["exposure"], "c": reading["click"],
                 "keep": reading["resource_name"] in j["keep"],
                 "title": cp.get("title") or "", "summary": cp.get("summary") or "",
+                "angleKey": cp.get("angleKey") or "",
+                "presentationType": cp.get("presentationType") or "",
+                "styleKey": cp.get("styleKey") or "",
+                "validationSlot": cp.get("validationSlot") or "",
             })
         if action:
             row["action"] = action

@@ -36,6 +36,38 @@ BUCKET_BLOCK = re.compile(r"<!-- BUCKET:START[^>]*-->[ \t]*\n?(.*?)<!-- BUCKET:E
 # 全局红线只有这一条，权威源是 流程文档/CSDN广告投放自动化流程.md §0。
 GLOBAL_REDLINE = "忌「翻墙」字样（合规红线，全部文案通用）"
 
+PRESENTATION_LABELS = {
+    "disguised_post": "伪装博文",
+    "direct_marketing": "纯营销",
+}
+STYLE_LABELS = {
+    "regular": "常规",
+    "antithesis": "对仗",
+    "adaptation": "化用",
+    "poetry_reference": "借鉴诗词",
+}
+VALIDATION_LABELS = {
+    "first_test": "首测",
+    "retest": "补验",
+    "backup": "备选",
+    "anchor": "锚点",
+}
+COPY_META_FIELDS = ("angleKey", "presentationType", "styleKey", "validationSlot")
+
+
+def copy_meta(c):
+    """把数据库/YAML 的分类键转成物料里可读的一行。"""
+    meta = [
+        PRESENTATION_LABELS.get(
+            c.get("presentationType"), c.get("presentationType") or "未标类型"),
+        STYLE_LABELS.get(c.get("styleKey"), c.get("styleKey") or "未标风格"),
+        VALIDATION_LABELS.get(
+            c.get("validationSlot"), c.get("validationSlot") or "未标验证位"),
+    ]
+    if c.get("angleKey"):
+        meta.append("角度 %s" % c["angleKey"])
+    return " · ".join(meta)
+
 
 def build_rule_text(act):
     """纪律条内容：全局红线 + `activity.ruleText`（= 用户给的活动特例，可空）。
@@ -58,11 +90,22 @@ def render_bucket(block, camp, b, i):
         "KEYWORDS": b["keywords"],
         "KW_NOTE": b.get("kwNote", ""),
     }
+    for index, c in enumerate(b["copies"], 1):
+        missing = [key for key in COPY_META_FIELDS if not c.get(key)]
+        if missing:
+            raise SystemExit(
+                "桶 %s 第 %d 条文案缺少分类字段：%s"
+                % (b["id"], index, ", ".join(missing))
+            )
     for c, suff in zip(b["copies"], ["A", "B", "C"]):
         m["TITLE_" + suff] = c["title"]
         m["DESC_" + suff] = c["summary"]
         m["HOOK_%s_KEY" % suff] = c.get("hookKey", "")
         m["HOOK_%s_NOTE" % suff] = c.get("hookNote", "")
+        m["META_" + suff] = copy_meta(c)
+    for index in range(len(b["copies"]) + 1, 4):
+        pattern = r"<!-- RES:%d:START -->.*?<!-- RES:%d:END -->" % (index, index)
+        block = re.sub(pattern, "", block, flags=re.S)
     for k, v in m.items():
         block = block.replace("{{%s}}" % k, str(v))
     return block

@@ -44,6 +44,7 @@ CONTROLS = {
 # AB 槽位：role → 后台行名（后台要从对照组往下填满、不能跳行）+ 流量占比（按资源条数，合计必须 100%）
 ROLE_ORDER = [("control", "对照组"), ("experiment1", "实验组1"), ("experiment2", "实验组2")]
 WEIGHT_BY_COUNT = {3: [34, 33, 33], 2: [50, 50]}
+COPY_META_FIELDS = ("angleKey", "presentationType", "styleKey", "validationSlot")
 
 
 def derive_ab_groups(resources):
@@ -95,13 +96,23 @@ def build(d, username):
     audiences = []
     for b in d["buckets"]:
         resources = []
-        for c in b["copies"]:
+        for index, c in enumerate(b["copies"], 1):
+            missing = [key for key in COPY_META_FIELDS if not c.get(key)]
+            if missing:
+                raise SystemExit(
+                    "桶 %s 第 %d 条文案缺少分类字段：%s"
+                    % (b["id"], index, ", ".join(missing))
+                )
             r = {
                 "role": c["role"],
                 "name": naming.resource_name(camp, b, c["label"]),
                 "title": c["title"],
                 "summary": c["summary"],
             }
+            for source in COPY_META_FIELDS:
+                target = source
+                value = str(c.get(source) or "").strip()
+                r[target] = value
             # 跳转链接（可选；契约见 RESOURCE.link）——桶级给整桶打底，单条优先。
             link = c.get("link") or b.get("link")
             if link:

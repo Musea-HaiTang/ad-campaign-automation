@@ -83,6 +83,14 @@
 | `title` | 广告标题，1 行，无 CTA |
 | `summary` | 广告描述，1 行 |
 | `link` | 可选；覆盖 `campaign.activityLink` |
+| `angleKey` | 可选；已冻结角度 ID，用于复盘按角度归因 |
+| `presentationType` | 可选；`disguised_post`（伪装博文）或 `direct_marketing`（纯营销） |
+| `styleKey` | 可选；`regular` / `antithesis` / `adaptation` / `poetry_reference` |
+| `validationSlot` | 可选；`first_test` / `retest` / `backup` / `anchor` |
+
+四个文案分类字段对旧 YAML 保持可选，避免中断历史续跑；新生成的文案必须填写，
+同步到数据库后分别落到 `creative.angle_key`、`presentation_type`、`style_key`、`validation_slot`。
+缺失时保持空值，不从标题或摘要倒猜。
 
 AB 资源和用户名单必须逐桶对应：工单应挂本桶资源、用本桶名单。`taskOrder` 中的 `abGroups`
 和 `distributionList` 只是兜底；正式投放前确认每个桶都写了自己的 `abGroups`。

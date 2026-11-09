@@ -54,6 +54,7 @@ class WorkspacePayloadTest(unittest.TestCase):
             self.conn, self.batch["id"], "r1", "demo-hang-A类 · 对照",
             "copy-1", "标题", "摘要", "angle-1", "regular",
             "control", 100, status="running",
+            presentation_type="direct_marketing", validation_slot="first_test",
         )
         fetch = repo.start_fetch_run(
             self.conn, self.activity["id"], scope="today", triggered_by="manual",
@@ -92,6 +93,11 @@ class WorkspacePayloadTest(unittest.TestCase):
         self.assertEqual(payload["batchJudge"]["A:1"][0]["pass"], True)
         self.assertEqual(payload["batchJudge"]["A:1"][0]["action"]["keep"],
                          ["demo-hang-A类 · 对照"])
+        copy = payload["copy"]["demo-hang-A类 · 对照"]
+        self.assertEqual(copy["angleKey"], "angle-1")
+        self.assertEqual(copy["presentationType"], "direct_marketing")
+        self.assertEqual(copy["styleKey"], "regular")
+        self.assertEqual(copy["validationSlot"], "first_test")
 
     def test_offline_current_batch_keeps_history_but_leaves_threshold(self):
         payload = payload_mod.build_payload(self.conn, self.activity["id"], today="2026-10-03")

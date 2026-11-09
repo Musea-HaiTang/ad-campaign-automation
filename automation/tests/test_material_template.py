@@ -32,9 +32,15 @@ def fake_def(n):
             "topic": "主题%d" % i,
             "keywords": "关键词1, 关键词2",
             "copies": [
-                {"role": "control", "label": "对照", "title": "标题A", "summary": "摘要A"},
-                {"role": "experiment1", "label": "实验1", "title": "标题B", "summary": "摘要B"},
-                {"role": "experiment2", "label": "实验2", "title": "标题C", "summary": "摘要C"},
+                {"role": "control", "label": "对照", "title": "标题A", "summary": "摘要A",
+                 "angleKey": "A-1", "presentationType": "direct_marketing",
+                 "styleKey": "regular", "validationSlot": "first_test"},
+                {"role": "experiment1", "label": "实验1", "title": "标题B", "summary": "摘要B",
+                 "angleKey": "A-2", "presentationType": "disguised_post",
+                 "styleKey": "adaptation", "validationSlot": "first_test"},
+                {"role": "experiment2", "label": "实验2", "title": "标题C", "summary": "摘要C",
+                 "angleKey": "A-3", "presentationType": "direct_marketing",
+                 "styleKey": "antithesis", "validationSlot": "first_test"},
             ],
         } for i in range(n)],
     }

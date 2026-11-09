@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>{{ACTIVITY_TITLE}} · 投放物料（复制用）</title>
-<!-- TEMPLATE:本文件只有一个「桶块」，由 BUCKET:START / BUCKET:END 两条注释标记圈住；生成器 gen_material.py 按桶数把它复制 N 份（4–7 类都成立）再填占位符。占位符——头部:ACTIVITY_TITLE/SUBTITLE/TASK_GROUP_NAME/ACTIVITY_RULE_TEXT/END_SEAL；桶内:GP(=G1/G2/…)/LETTER/NAME/AUDIENCE/TASKNAME/KEYWORDS/KW_NOTE/TITLE_A,B,C/DESC_A,B,C/HOOK_A,B,C_KEY/HOOK_A,B,C_NOTE。改模板＝只改本文件；生成器里没有任何活动内容。 -->
+<!-- TEMPLATE:本文件只有一个「桶块」，由 BUCKET:START / BUCKET:END 两条注释标记圈住；生成器 gen_material.py 按桶数把它复制 N 份（4–7 类都成立）再填占位符。资源卡由 RES:1/2/3:START/END 圈住，2 资源桶会裁掉 RES:3。占位符——头部:ACTIVITY_TITLE/SUBTITLE/TASK_GROUP_NAME/ACTIVITY_RULE_TEXT/END_SEAL；桶内:GP(=G1/G2/…)/LETTER/NAME/AUDIENCE/TASKNAME/KEYWORDS/KW_NOTE/TITLE_A,B,C/DESC_A,B,C/META_A,B,C/HOOK_A,B,C_KEY/HOOK_A,B,C_NOTE。改模板＝只改本文件；生成器里没有任何活动内容。 -->
 <style>
  :root {
  --paper: #f4eee0; --paper-deep: #ece2cb; --card: #fbf7ec;
@@ -111,27 +111,36 @@
  </div>
  <div class="lbl"><span class="tag">①</span> 资源文案</div>
  <div class="res">
+<!-- RES:1:START -->
  <div class="res-item">
  <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
  <span class="res-role ctrl">对照</span>
  <div class="f"><span class="v">{{TITLE_A}}</span></div>
  <div class="f desc"><span class="v">{{DESC_A}}</span></div>
+<div class="hook">分类：{{META_A}}</div>
  <div class="hook">钩子：<b>{{HOOK_A_KEY}}</b>，{{HOOK_A_NOTE}}</div>
  </div>
+<!-- RES:1:END -->
+<!-- RES:2:START -->
  <div class="res-item">
  <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
  <span class="res-role">实验1</span>
  <div class="f"><span class="v">{{TITLE_B}}</span></div>
  <div class="f desc"><span class="v">{{DESC_B}}</span></div>
+<div class="hook">分类：{{META_B}}</div>
  <div class="hook">钩子：<b>{{HOOK_B_KEY}}</b>，{{HOOK_B_NOTE}}</div>
  </div>
+<!-- RES:2:END -->
+<!-- RES:3:START -->
  <div class="res-item">
  <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
  <span class="res-role">实验2</span>
  <div class="f"><span class="v">{{TITLE_C}}</span></div>
  <div class="f desc"><span class="v">{{DESC_C}}</span></div>
+<div class="hook">分类：{{META_C}}</div>
  <div class="hook">钩子：<b>{{HOOK_C_KEY}}</b>，{{HOOK_C_NOTE}}</div>
  </div>
+<!-- RES:3:END -->
  </div>
  <div class="lbl"><span class="tag">②</span> 客群关键词</div>
  <div class="kw">

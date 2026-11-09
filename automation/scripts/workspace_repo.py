@@ -13,7 +13,7 @@ import db_backup
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 V2_DB = os.path.join(REPO, "activities", "_db", "投放数据.db")
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 CURRENT_VIEW_SQL = """
 CREATE VIEW IF NOT EXISTS v_bucket_current AS
@@ -111,6 +111,8 @@ CREATE TABLE IF NOT EXISTS creative (
   highlight     TEXT NOT NULL DEFAULT '',
   angle_key     TEXT NOT NULL DEFAULT '',
   style_key     TEXT NOT NULL DEFAULT '',
+  presentation_type TEXT NOT NULL DEFAULT '',
+  validation_slot   TEXT NOT NULL DEFAULT '',
   slot          TEXT NOT NULL CHECK(slot IN (
                   'control', 'experiment1', 'experiment2', 'single'
                 )),
@@ -287,6 +289,7 @@ def transaction(conn):
 
 def _migrate(conn):
     """把旧版遗留结构升到当前版本；有数据时拒绝静默删除。"""
+    _ensure_creative_columns(conn)
     row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
     current = row[0] if row else None
     if current is not None and current >= SCHEMA_VERSION:
@@ -310,6 +313,18 @@ def _migrate(conn):
         "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES(?, ?)",
         (SCHEMA_VERSION, _now()),
     )
+
+
+def _ensure_creative_columns(conn):
+    """给 v5 及更早的 creative 表补文案分类字段；旧行保留空值。"""
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(creative)").fetchall()
+    }
+    for name in ("presentation_type", "validation_slot"):
+        if name not in columns:
+            conn.execute(
+                "ALTER TABLE creative ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % name
+            )
 
 
 def _repair_imported_batch_order(conn):
@@ -561,35 +576,43 @@ def finish_fetch_run(conn, fetch_id, status, error_text="", returned_days=0,
 
 
 def add_creative(conn, batch_id, resource_id, resource_name, copy_id, title, summary,
-                 angle_key, style_key, slot, weight_pct, status="planned"):
+                 angle_key, style_key, slot, weight_pct, status="planned",
+                 presentation_type="", validation_slot=""):
     resource_id = str(resource_id).strip() if resource_id else None
     with conn:
         cur = conn.execute(
             "INSERT INTO creative(batch_id, resource_id, resource_name, copy_id, title, "
-            "summary, angle_key, style_key, slot, weight_pct, status) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "summary, angle_key, style_key, presentation_type, validation_slot, "
+            "slot, weight_pct, status) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (batch_id, resource_id, resource_name, copy_id, title, summary,
-             angle_key, style_key, slot, weight_pct, status),
+             angle_key, style_key, presentation_type, validation_slot,
+             slot, weight_pct, status),
         )
     return _row(conn.execute("SELECT * FROM creative WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
 def save_creative(conn, batch_id, resource_id, resource_name, copy_id, title, summary,
-                  angle_key, style_key, slot, weight_pct, status):
+                  angle_key, style_key, slot, weight_pct, status,
+                  presentation_type="", validation_slot=""):
     """按批次槽位幂等保存文案；重复执行会更新同一行。"""
     resource_id = str(resource_id).strip() if resource_id else None
     with transaction(conn):
         conn.execute(
             "INSERT INTO creative(batch_id, resource_id, resource_name, copy_id, title, "
-            "summary, angle_key, style_key, slot, weight_pct, status) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+            "summary, angle_key, style_key, presentation_type, validation_slot, "
+            "slot, weight_pct, status) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(batch_id, slot) DO UPDATE SET resource_id=excluded.resource_id, "
             "resource_name=excluded.resource_name, copy_id=excluded.copy_id, "
             "title=excluded.title, summary=excluded.summary, "
             "angle_key=excluded.angle_key, style_key=excluded.style_key, "
+            "presentation_type=excluded.presentation_type, "
+            "validation_slot=excluded.validation_slot, "
             "weight_pct=excluded.weight_pct, status=excluded.status",
             (batch_id, resource_id, resource_name or "", copy_id, title, summary,
-             angle_key, style_key, slot, weight_pct, status),
+             angle_key, style_key, presentation_type, validation_slot,
+             slot, weight_pct, status),
         )
     return _row(conn.execute(
         "SELECT * FROM creative WHERE batch_id=? AND slot=?", (batch_id, slot)

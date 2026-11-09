@@ -54,6 +54,15 @@ class WorkspaceSyncTest(unittest.TestCase):
             ).fetchone()[0],
             3,
         )
+        first_copy = conn.execute(
+            "SELECT angle_key, presentation_type, style_key, validation_slot "
+            "FROM creative WHERE batch_id=? ORDER BY slot LIMIT 1",
+            (batch["id"],),
+        ).fetchone()
+        self.assertEqual(
+            tuple(first_copy),
+            ("A-场景痛点", "direct_marketing", "regular", "first_test"),
+        )
 
     def test_execution_yaml_cannot_reactivate_ended_activity(self):
         audience = self.cfg["audiences"][0]
@@ -117,12 +126,14 @@ class WorkspaceSyncTest(unittest.TestCase):
         conn = repo.connect(self.db_path)
         self.addCleanup(conn.close)
         old_rows = conn.execute(
-            "SELECT resource_name, title, summary FROM creative "
+            "SELECT resource_name, title, summary, angle_key, presentation_type, "
+            "style_key, validation_slot FROM creative "
             "WHERE batch_id=? ORDER BY slot",
             (first["batch_ids"][0],),
         ).fetchall()
         new_rows = conn.execute(
-            "SELECT resource_name, title, summary FROM creative "
+            "SELECT resource_name, title, summary, angle_key, presentation_type, "
+            "style_key, validation_slot FROM creative "
             "WHERE batch_id=? ORDER BY slot",
             (second["batch_ids"][0],),
         ).fetchall()

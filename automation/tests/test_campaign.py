@@ -56,7 +56,9 @@ def good():
             "subBusinessLine": "训练营与大赛",
             "keywordGroup": {"keywords": "关键词1,关键词2"},
             "resources": [{"role": "control", "name": "测试hang-A类 · 对照",
-                           "title": "标题", "summary": "摘要"}],
+                           "title": "标题", "summary": "摘要",
+                           "angleKey": "A-1", "presentationType": "direct_marketing",
+                           "styleKey": "regular", "validationSlot": "first_test"}],
         }],
         "taskOrder": {
             "businessLine": "企业服务事业部",
@@ -179,6 +181,20 @@ class CampaignTest(unittest.TestCase):
     def test_历史highlight字段仍可装载(self):
         d0 = good()
         d0["audiences"][0]["resources"][0]["highlight"] = "历史词"
+        self.assertEqual(campaign.validate(d0), [])
+
+    def test_文案分类字段接受约定值并拒绝未知值(self):
+        d0 = good()
+        self.assertEqual(campaign.validate(d0), [])
+        d0["audiences"][0]["resources"][0]["styleKey"] = "poetry"
+        errs = campaign.validate(d0)
+        self.assertTrue(any("styleKey" in e and "不合法" in e for e in errs), errs)
+
+    def test_旧执行YAML缺分类字段仍可继续装载(self):
+        d0 = good()
+        resource = d0["audiences"][0]["resources"][0]
+        for key in ("angleKey", "presentationType", "styleKey", "validationSlot"):
+            resource.pop(key)
         self.assertEqual(campaign.validate(d0), [])
 
     def test_桶的resources可以是空列表(self):

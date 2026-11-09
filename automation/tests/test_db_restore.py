@@ -29,7 +29,7 @@ class DatabaseRestoreTest(unittest.TestCase):
             snapshot = Path(tmp) / "snapshot.db"
             _make_db(snapshot, "ok")
             result = db_restore.validate_snapshot(snapshot)
-            self.assertEqual(result["schema_version"], 5)
+            self.assertEqual(result["schema_version"], 6)
             self.assertEqual(result["foreign_key_issues"], 0)
 
     def test_恢复前备份当前库并恢复快照(self):

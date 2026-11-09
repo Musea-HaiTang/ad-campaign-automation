@@ -93,10 +93,11 @@ def sync_config_batch(v2_db_path, cfg, audiences, started_on,
                     resource_name = str(group.get("resource") or "").strip()
                     if not resource_name:
                         continue
+                    previous = workspace_repo.latest_creative_copy(
+                        conn, activity["id"], resource_name) or {}
                     copy = (
                         copy_by_name.get(resource_name) or
-                        workspace_repo.latest_creative_copy(
-                            conn, activity["id"], resource_name) or
+                        previous or
                         {}
                     )
                     workspace_repo.save_creative(
@@ -104,10 +105,19 @@ def sync_config_batch(v2_db_path, cfg, audiences, started_on,
                         copy_id=resource_name,
                         title=copy.get("title") or "",
                         summary=copy.get("summary") or "",
-                        angle_key="", style_key="",
+                        angle_key=copy.get("angleKey") or previous.get("angle_key") or "",
+                        style_key=copy.get("styleKey") or previous.get("style_key") or "",
                         slot=_slot(index, len(groups)),
                         weight_pct=int(group.get("weightPct") or weights[index]),
                         status="planned" if status == "planned" else "running",
+                        presentation_type=(
+                            copy.get("presentationType") or
+                            previous.get("presentation_type") or ""
+                        ),
+                        validation_slot=(
+                            copy.get("validationSlot") or
+                            previous.get("validation_slot") or ""
+                        ),
                     )
             return {"activity_id": activity["id"], "batch_ids": batch_ids}
     finally:

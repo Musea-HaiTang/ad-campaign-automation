@@ -31,7 +31,13 @@ AUDIENCE = {"id", "topic", "target", "taskName", "subBusinessLine", "keywordGrou
             "reviewThresholdExposure",
             "abGroups", "distributionList", "nameSuffix"}   # 逐桶覆盖：工单挂本桶的 3 资源 / 本桶的用户名单 / 重投名字后缀（-2）
 KEYWORD_GROUP = {"keywords"}
-RESOURCE = {"role", "name", "title", "summary", "link"}
+PRESENTATION_TYPES = {"disguised_post", "direct_marketing"}
+STYLE_KEYS = {"regular", "antithesis", "adaptation", "poetry_reference"}
+VALIDATION_SLOTS = {"first_test", "retest", "backup", "anchor"}
+RESOURCE = {
+    "role", "name", "title", "summary", "link",
+    "angleKey", "presentationType", "styleKey", "validationSlot",
+}
 LEGACY_RESOURCE = {"highlight"}  # 历史 YAML 仍可装载，但运行时忽略
 # abTest（2026-10-12 加）：true / 缺省 = 老路（AB测试=是，逐组挂资源）；
 #   false = **单资源长期单**（AB测试=否，只挂 abGroups 的第一条、没有流量占比）——D 桶转长期单用。
@@ -160,6 +166,15 @@ def validate(data):
             e.keys(rp, r, RESOURCE | LEGACY_RESOURCE)
             for k in ("role", "name", "title", "summary"):
                 e.need(rp, r, k)
+            for key, allowed, label in (
+                ("presentationType", PRESENTATION_TYPES, "呈现类型"),
+                ("styleKey", STYLE_KEYS, "风格"),
+                ("validationSlot", VALIDATION_SLOTS, "验证位"),
+            ):
+                value = r.get(key)
+                if value not in (None, "") and value not in allowed:
+                    e.add("%s.%s 的%s不合法：%s（可选 %s）" % (
+                        rp, key, label, value, " / ".join(sorted(allowed))))
         own = (a or {}).get("abGroups")
         if own is not None:
             if not isinstance(own, list) or not own:
