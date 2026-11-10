@@ -21,7 +21,7 @@
 - **装载只走 `campaign.load(路径)`**：不许 `cfg.get("字段", 默认值)` 自兜底——字段写错要启动就报错，别跑到浏览器第 3 步。
 - **列表页只读**：`list_page` 不提供新建 / 提交 / 确定；写入只留在各 `run_*.py` 的提交闸门里。
 - **浏览器只有一只**：`scripts/browser_broker.py`（独立 Edge/Chrome，首选 CDP 9222，冲突时写入实际端口）——不许再写 `launch_persistent_context`。
-- **改共用层就配单测**：`automation/tests/`（假柜台，不开真浏览器），跑 `.venv\Scripts\python.exe -m unittest discover -s automation/tests -v`。
+- **改共用层就配单测**：`automation/tests/`（假柜台，不开真浏览器），用仓库 venv 跑 `-m unittest discover -s automation/tests -v`；Windows 解释器是 `.venv\Scripts\python.exe`，macOS 是 `.venv/bin/python`。
 
 ## 必读
 

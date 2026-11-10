@@ -95,10 +95,26 @@ class DocsConsistencyTest(unittest.TestCase):
     def test_不再保留独立发布脚本(self):
         self.assertFalse((ROOT / "scripts" / "push_github.ps1").exists())
 
+    def test_CI覆盖_Windows_macOS和Python支持范围(self):
+        workflow = (
+            ROOT / ".github" / "workflows" / "python-compatibility.yml"
+        ).read_text(encoding="utf-8")
+        for value in (
+            "windows-latest",
+            "macos-latest",
+            '"3.11"',
+            '"3.12"',
+            '"3.13"',
+            '"3.14"',
+            '"3.15"',
+        ):
+            self.assertIn(value, workflow)
+
     def test_关键运维文档存在(self):
         required = (
             ROOT / "README.md",
             ROOT / "AGENTS.md",
+            ROOT / "AI一键部署.md",
             ROOT / "运营使用说明.md",
             ROOT / "automation" / "README.md",
             ROOT / "automation" / "docs" / "执行层全流程.md",
@@ -120,6 +136,7 @@ class DocsConsistencyTest(unittest.TestCase):
         required = (
             "README.md",
             "AGENTS.md",
+            "AI一键部署.md",
             "运营使用说明.md",
             "automation/README.md",
             "automation/docs/执行层全流程.md",
@@ -166,6 +183,13 @@ class DocsConsistencyTest(unittest.TestCase):
         self.assertIn("## 文档导航", readme)
         self.assertNotIn("P0 发布阻断项", readme)
         self.assertNotIn("私有仓库", readme)
+
+    def test_AI部署入口唯一且不使用人工部署提示(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        guide = (ROOT / "运营使用说明.md").read_text(encoding="utf-8")
+        self.assertIn("AI一键部署.md", readme)
+        self.assertIn("AI一键部署.md", guide)
+        self.assertNotIn("我已经新建了独立工作空间", guide)
 
     def test_环境文档不写个人机器Python补丁版本(self):
         hits = []

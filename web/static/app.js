@@ -1399,7 +1399,7 @@
       loadFetchState();
     }).catch(function (error) {
       $("fetchstate").textContent = "拿不到活动清单（" + error.message +
-        "）：确认本地服务在跑——web/app.py 或双击 web/start-hidden.vbs。";
+        "）：确认本地服务在跑——web/app.py 或按平台使用 start-hidden.vbs / board_service.py。";
     });
   }
 
@@ -1436,7 +1436,7 @@
       $("ttl").textContent = "数据加载失败";
       $("coverage").textContent = "数据至 —";
       $("fetchstate").textContent = error.message +
-        (/^HTTP /.test(error.message) ? "——确认本地服务在跑（web/app.py，或双击 web/start-hidden.vbs）" : "");
+        (/^HTTP /.test(error.message) ? "——确认本地服务在跑（web/app.py，或按平台启动看板）" : "");
     });
   }
 

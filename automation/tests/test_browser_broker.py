@@ -19,7 +19,7 @@ class BrokerStopTest(unittest.TestCase):
         with mock.patch.object(broker, "_state", return_value=state), \
                 mock.patch.object(broker.runtime_state, "process_matches", return_value=True), \
                 mock.patch.object(broker.runtime_state, "clear_state"), \
-                mock.patch.object(broker.runtime_state, "run_hidden"), \
+                mock.patch.object(broker.runtime_state, "terminate_process"), \
                 mock.patch.object(broker, "_responsive", return_value=True):
             with self.assertRaises(RuntimeError):
                 broker.stop()
@@ -29,7 +29,7 @@ class BrokerStopTest(unittest.TestCase):
         with mock.patch.object(broker, "_state", return_value=state), \
                 mock.patch.object(broker.runtime_state, "process_matches", return_value=True), \
                 mock.patch.object(broker.runtime_state, "clear_state"), \
-                mock.patch.object(broker.runtime_state, "run_hidden"), \
+                mock.patch.object(broker.runtime_state, "terminate_process"), \
                 mock.patch.object(
                     broker.cleanup,
                     "maybe_clean_browser_profile",
@@ -59,6 +59,19 @@ class BrokerStopTest(unittest.TestCase):
                     side_effect=lambda kind: [] if kind == "Edge" else [r"C:\Chrome\chrome.exe"],
                 ):
             self.assertEqual(broker.browser_exe(), r"C:\Chrome\chrome.exe")
+
+    def test_MAC自动检测使用应用程序目录(self):
+        with mock.patch.object(broker.sys, "platform", "darwin"), \
+                mock.patch.object(
+                    broker.os.path, "expanduser",
+                    return_value="/Users/test/Applications",
+                ), \
+                mock.patch.object(broker.os.path, "isfile", return_value=True):
+            paths = broker._browser_candidates("Chrome")
+        self.assertIn(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            paths,
+        )
 
     def test_CDP地址读取状态中的实际端口(self):
         with mock.patch.object(broker, "_state", return_value={"pid": 1, "port": 9231}):

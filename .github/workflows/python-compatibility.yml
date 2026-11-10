@@ -1,0 +1,72 @@
+name: Python compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+          - "3.15"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show interpreter
+        shell: bash
+        run: python --version
+
+      - name: Deploy and run tests
+        shell: bash
+        run: python scripts/setup_ai.py --owner ci --run-tests
+
+      - name: Verify setup result
+        shell: bash
+        run: >-
+          python -c "import json,pathlib,sys;
+          p=pathlib.Path('.local/setup-result.json');
+          d=json.loads(p.read_text(encoding='utf-8'));
+          print(d.get('status'));
+          sys.exit(0 if d.get('status')=='ok' else 1)"
+
+      - name: Show deployment result after failure
+        if: always()
+        shell: bash
+        run: |
+          if [ -f .local/setup-result.json ]; then
+            cat .local/setup-result.json
+          fi
+          if [ -f .local/test-results.json ]; then
+            cat .local/test-results.json
+          fi
+          if [ -f .local/setup-ai.log ]; then
+            tail -n 200 .local/setup-ai.log
+          fi

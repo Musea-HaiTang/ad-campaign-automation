@@ -52,11 +52,12 @@ browser_broker.py`，首选 CDP 9222，冲突时使用实际端口）：以前"�
    它们挂的是同一只公共浏览器（`--headed` 会把公共浏览器切成有窗口，会重启一次）。
 
 用法：
-    .venv\\Scripts\\python.exe -u web/app.py
+    Windows: .venv\\Scripts\\python.exe -u web/app.py
+    macOS:   .venv/bin/python -u web/app.py
     ... --port 8770      # 首选 8770（只本机）；占用时自动向后寻找；--host 0.0.0.0 才允许同局域网其他机器访问
     ... --db 别的.db     # 换数据库（默认 activities/_db/投放数据.db）
     ... --auto 30        # 自动刷新间隔（分钟；默认 30，给 0 关掉）
-    懒得敲命令就双击 `web/start-hidden.vbs`。
+    Windows 可直接双击 `web/start-hidden.vbs`；macOS 用上面的 Python 命令。
 
 用户 2026-09-28 定：**服务自己定时刷新**（`--auto`，默认 30 分钟）——
 每天第一次先跑一次「取数」（把**昨天**的终值固定下来，只刷今天的话昨天那行会永远停在半截），
@@ -421,7 +422,7 @@ def _fetch_job(item, mode):
 def fetch_worker():
     """取数线程：**独占**那一条浏览器连接，任务从队列里来（playwright 同步接口不能跨线程）。
 
-    起服务时就把公共浏览器拉起来（用户要的：双击 start-hidden.vbs 就起）；拉不起来也不算完蛋——
+    起服务时就把公共浏览器拉起来（用户要的：启动看板就起）；拉不起来也不算完蛋——
     第一次点刷新会再试一次。出错的连接不留着，直接断开重挂（**浏览器本身不关**，别的程序还在用）。
     """
     global BROWSER

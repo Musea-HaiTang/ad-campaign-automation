@@ -1,5 +1,6 @@
 # Runtime and test dependencies.
-# Install with: .venv\Scripts\python.exe -m pip install -r requirements.txt
+# Windows: .venv\Scripts\python.exe -m pip install -r requirements.txt
+# macOS:   .venv/bin/python -m pip install -r requirements.txt
 
 pyyaml>=6.0
 

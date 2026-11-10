@@ -15,6 +15,48 @@ import setup_ai  # noqa: E402
 
 
 class SetupAITest(unittest.TestCase):
+    def test_支持_Python_3_11_到_3_15(self):
+        for version in (
+            "3.11.9",
+            "3.12.4",
+            "3.13.7",
+            "3.14.10",
+            "3.15.2",
+        ):
+            with self.subTest(version=version):
+                self.assertTrue(setup_ai.compatible({"version": version}))
+
+    def test_拒绝_Python_3_11_以下和_3_15_以上(self):
+        for version in ("3.10.14", "3.16.0", "2.7.18"):
+            with self.subTest(version=version):
+                self.assertFalse(setup_ai.compatible({"version": version}))
+
+    def test_虚拟环境路径按平台选择(self):
+        with mock.patch.object(setup_ai.sys, "platform", "win32"):
+            self.assertEqual(
+                setup_ai.venv_python_path(),
+                setup_ai.ROOT / ".venv" / "Scripts" / "python.exe",
+            )
+        with mock.patch.object(setup_ai.sys, "platform", "darwin"):
+            self.assertEqual(
+                setup_ai.venv_python_path(),
+                setup_ai.ROOT / ".venv" / "bin" / "python",
+            )
+
+    def test_MAC通过看板服务启动而不是VBS(self):
+        completed = mock.Mock(returncode=0, stdout="")
+        with mock.patch.object(setup_ai.sys, "platform", "darwin"), \
+                mock.patch.object(setup_ai, "run", return_value=completed) as run:
+            setup_ai.launch_board("/repo/.venv/bin/python")
+        run.assert_called_once_with(
+            [
+                "/repo/.venv/bin/python",
+                str(setup_ai.ROOT / "automation" / "scripts" / "board_service.py"),
+                "--start",
+            ],
+            timeout_seconds=45,
+        )
+
     def test_新部署必须显式提供_owner(self):
         with temp_workdir("setup-ai-owner-") as tmp:
             local = Path(tmp)

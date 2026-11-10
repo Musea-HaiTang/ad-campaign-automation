@@ -8,9 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
 import sqlite3
-import subprocess
 import sys
 import time
 from typing import Any
@@ -23,6 +21,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "automation" / "scripts"))
 
 import runtime_state  # noqa: E402
+from python_support import SUPPORTED_PYTHON_LABEL, supported_python  # noqa: E402
 
 DB_PATH = REPO / "activities" / "_db" / "投放数据.db"
 OPERATOR_PATH = REPO / ".local" / "operator.json"
@@ -56,47 +55,19 @@ def parse_listener_pids(netstat_text: str, port: int) -> list[int]:
 
 
 def listener_pids(port: int) -> list[int]:
-    result = subprocess.run(
-        ["netstat", "-ano", "-p", "tcp"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=20,
-    )
-    return parse_listener_pids(result.stdout, port)
+    return runtime_state.listener_pids(port)
 
 
 def process_info(pid: int) -> dict[str, str]:
-    powershell = Path(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
-    executable = str(powershell) if powershell.is_file() else (shutil.which("powershell") or "")
-    if not executable:
-        return {}
-    command = (
-        "$p=Get-CimInstance Win32_Process -Filter 'ProcessId=" + str(int(pid)) + "' "
-        "| Select-Object ProcessId,Name,ExecutablePath,CommandLine; "
-        "$p | ConvertTo-Json -Compress"
-    )
-    try:
-        result = subprocess.run(
-            [executable, "-NoProfile", "-Command", command],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=20,
-        )
-        text = result.stdout.strip()
-        if not text:
-            return {}
-        data = json.loads(text)
-        return {str(k): str(v or "") for k, v in data.items()}
-    except Exception:
-        return {}
+    return {
+        str(key): str(value or "")
+        for key, value in runtime_state.process_info(pid).items()
+    }
 
 
 def is_project_port_owner(port: int, info: dict[str, str]) -> bool:
-    command = info.get("CommandLine", "").replace("/", "\\").lower()
-    repo = str(REPO).replace("/", "\\").lower()
+    command = runtime_state.normalize_process_text(info.get("CommandLine", ""))
+    repo = runtime_state.normalize_process_text(str(REPO))
     if "app.py" in command:
         return repo in command
     if "remote-debugging-port" in command:
@@ -113,7 +84,7 @@ def check_port(
     try:
         pids = listener_pids(port)
     except Exception as exc:
-        report(False, f"{label} {port}", str(exc), "重新运行诊断；若仍失败，检查 netstat 是否可用。", failures)
+        report(False, f"{label} {port}", str(exc), "重新运行诊断；若仍失败，检查系统端口查询工具是否可用。", failures)
         return False
     if not pids:
         report(True, f"{label} {port}", "端口空闲")
@@ -147,12 +118,12 @@ def check_port(
 
 def check_python(failures: list[str]) -> None:
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    ok = sys.version_info.major == 3 and 12 <= sys.version_info.minor <= 14
+    ok = supported_python(sys.version_info.major, sys.version_info.minor)
     report(
         ok,
         "Python",
         f"{version} ({sys.executable})",
-        "使用 Python 3.12-3.14，并重新运行 README 中的 AI 一键部署。",
+        f"使用 {SUPPORTED_PYTHON_LABEL}，并重新运行 AI 一键部署。",
         failures,
     )
 
@@ -161,11 +132,15 @@ def check_venv(failures: list[str]) -> None:
     expected = (REPO / ".venv").resolve()
     current = Path(sys.executable).resolve()
     ok = expected == current.parent.parent
+    hint = (
+        ".venv\\Scripts\\python.exe scripts\\doctor.py"
+        if sys.platform == "win32" else ".venv/bin/python scripts/doctor.py"
+    )
     report(
         ok,
         "虚拟环境",
         str(current),
-        "使用 .venv\\Scripts\\python.exe scripts\\doctor.py 运行诊断。",
+        f"使用 {hint} 运行诊断。",
         failures,
     )
 
@@ -203,7 +178,7 @@ def check_browser(failures: list[str]) -> tuple[str, Path] | None:
         import browser_broker
 
         path = Path(browser_broker.browser_exe())
-        name = "Chrome" if path.name.lower() == "chrome.exe" else "Edge"
+        name = browser_broker.browser_kind(path)
     except Exception as exc:
         report(
             False,
@@ -333,6 +308,10 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
         report(False, "CSDN 登录", str(exc), "先安装依赖并重新运行一键部署。", failures)
         return
 
+    login_hint = (
+        ".venv\\Scripts\\python.exe scripts\\doctor.py --login"
+        if sys.platform == "win32" else ".venv/bin/python scripts/doctor.py --login"
+    )
     try:
         browser_broker.ensure("headed" if login else "headless")
         with sync_playwright() as playwright:
@@ -364,7 +343,7 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
                         False,
                         "广告后台登录",
                         admin_detail,
-                        "运行 .venv\\Scripts\\python.exe scripts\\doctor.py --login",
+                        f"运行 {login_hint}",
                         failures,
                     )
 
@@ -387,7 +366,7 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
                     data_ok,
                     "数据平台登录",
                     data_detail,
-                    "运行 .venv\\Scripts\\python.exe scripts\\doctor.py --login",
+                    f"运行 {login_hint}",
                     failures,
                 )
             finally:

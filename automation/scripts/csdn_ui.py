@@ -27,10 +27,10 @@ import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
-import msvcrt
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import browser_broker as broker  # noqa: E402
+import runtime_state  # noqa: E402
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 # 写后台的锁：真办事（--submit）时同一时刻只允许一个脚本（见 _write_lock）
@@ -221,28 +221,17 @@ def _write_lock():
     """真办事时的一把锁：同一时刻只允许一个脚本往后台建东西。
 
     两个脚本一起点后台、"到底谁把这条建重了"根本查不出来——直接拦下来说清楚。
-    Windows 的字节区间锁：进程一死锁自动放掉，不会留下"过期锁"要人手工清。
+    使用当前平台的进程锁：进程一死锁自动放掉，不会留下"过期锁"要人手工清。
     """
     path = os.path.abspath(WRITE_LOCK)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fh = open(path, "a+", encoding="utf-8")
+    handle = runtime_state.acquire_file_lock(path)
+    if handle is None:
+        raise RuntimeError("已有另一个脚本在往后台建东西——同一时刻只允许一个（等它跑完再跑）")
     try:
-        try:
-            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError:
-            fh.close()
-            raise RuntimeError("已有另一个脚本在往后台建东西——同一时刻只允许一个（等它跑完再跑）")
         yield
     finally:
-        try:
-            fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-        except Exception:
-            pass
-        try:
-            fh.close()
-        except Exception:
-            pass
+        runtime_state.release_file_lock(handle)
 
 
 @contextmanager

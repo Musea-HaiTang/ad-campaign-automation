@@ -5,10 +5,10 @@
 
 ## 跑之前（环境只写在这一处）
 
-- **解释器固定用仓库根下的 `.venv\Scripts\python.exe`**（Python 3.12-3.14 + PyYAML + Playwright，依赖清单见仓库根 `requirements.txt`）。**一律用 venv 解释器，不假设系统 `python` 的版本或 PATH。**
-  venv 缺失时，使用本机已安装的任意 Python 3.12-3.14 显式创建：`& "<Python 3.12-3.14 路径>\python.exe" -m venv .venv`，再执行 `.venv\Scripts\python.exe -m pip install -r requirements.txt`。
+- **解释器固定用仓库根下的 venv**（Python 3.11-3.15 + PyYAML + Playwright，依赖清单见仓库根 `requirements.txt`）。Windows 是 `.venv\Scripts\python.exe`，macOS 是 `.venv/bin/python`。**一律用 venv 解释器，不假设系统 `python` 的版本或 PATH。**
+  venv 缺失时，用本机 Python 3.11-3.15 执行 `python -m venv .venv`；Windows 再用 `.venv\Scripts\python.exe -m pip install -r requirements.txt`，macOS 用 `.venv/bin/python -m pip install -r requirements.txt`。
 - 浏览器自动使用本机 Microsoft Edge 或 Google Chrome，选择结果记录在 `.local/browser.json`；登录 profile 在仓库内的 `.browser-profile`（cookie 过期跑 [`wait_login.py`](docs/wait_login.md) 重登）。如果系统策略拦截浏览器启动，再由当前操作者按本机安全策略允许。
-- 每一步怎么做、在哪停：见 [`docs/执行层全流程.md`](docs/执行层全流程.md)。共用层的验收入口：`.venv\Scripts\python.exe -m unittest discover -s automation/tests -v`（假柜台，不开真浏览器）。
+- 每一步怎么做、在哪停：见 [`docs/执行层全流程.md`](docs/执行层全流程.md)。共用层的验收入口用对应平台的 venv 解释器执行 `-m unittest discover -s automation/tests -v`（假柜台，不开真浏览器）。
 
 ## 目录
 
