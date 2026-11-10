@@ -53,6 +53,59 @@ class RuntimeStateTest(unittest.TestCase):
         ):
             self.assertEqual(runtime_state.listening_ports(8770, 10), [8770, 8777])
 
+    def test_MAC解析_LSOF监听端口(self):
+        rows = """p123
+n127.0.0.1:8770
+p456
+n[::1]:8777
+"""
+        self.assertEqual(
+            runtime_state._parse_lsof_listeners(rows),
+            {8770: [123], 8777: [456]},
+        )
+
+    def test_MAC端口扫描调用_LSOF(self):
+        rows = "p123\nn127.0.0.1:8770\n"
+        with mock.patch.object(runtime_state, "IS_WINDOWS", False), \
+                mock.patch.object(runtime_state.shutil, "which", return_value="/usr/sbin/lsof"), \
+                mock.patch.object(
+                    runtime_state, "run_hidden",
+                    return_value=mock.Mock(stdout=rows),
+                ) as run:
+            self.assertEqual(runtime_state.listener_map(), {8770: [123]})
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"],
+        )
+
+    def test_MAC结束进程使用系统信号(self):
+        with mock.patch.object(runtime_state, "IS_WINDOWS", False), \
+                mock.patch.object(runtime_state.os, "kill") as kill:
+            self.assertTrue(runtime_state.terminate_process(123, force=True))
+        kill.assert_called_once()
+
+    def test_MAC读取完整命令行(self):
+        rows = """123 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/repo/.browser-profile
+456 /repo/.venv/bin/python app.py
+"""
+        with mock.patch.object(runtime_state, "IS_WINDOWS", False), \
+                mock.patch.object(
+                    runtime_state, "run_hidden",
+                    return_value=mock.Mock(stdout=rows),
+                ) as run:
+            processes = runtime_state.process_commands()
+        self.assertIn("--user-data-dir=/repo/.browser-profile", processes[123])
+        self.assertEqual(run.call_args.args[0], ["/bin/ps", "-ww", "-axo", "pid=,command="])
+
+    def test_后台进程参数按平台选择(self):
+        with mock.patch.object(runtime_state, "IS_WINDOWS", False):
+            self.assertEqual(
+                runtime_state.detached_process_kwargs(),
+                {"start_new_session": True},
+            )
+        with mock.patch.object(runtime_state, "IS_WINDOWS", True):
+            self.assertIn("creationflags", runtime_state.detached_process_kwargs())
+
     def test_后台命令在_WINDOWS_使用隐藏窗口(self):
         if not runtime_state.HIDDEN_FLAGS:
             self.skipTest("仅 Windows 需要隐藏控制台参数")

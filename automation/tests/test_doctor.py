@@ -54,6 +54,20 @@ class DoctorTest(unittest.TestCase):
         finally:
             doctor.REPO = old_repo
 
+    def test_识别_MAC项目看板进程(self):
+        info = {
+            "CommandLine": (
+                "/repo/.venv/bin/python -u app.py "
+                "--db /repo/activities/_db/投放数据.db"
+            )
+        }
+        old_repo = doctor.REPO
+        try:
+            doctor.REPO = Path("/repo")
+            self.assertTrue(doctor.is_project_port_owner(8770, info))
+        finally:
+            doctor.REPO = old_repo
+
     def test_保存广告用户名保留owner(self):
         with temp_workdir("doctor-") as tmp:
             path = Path(tmp) / "operator.json"

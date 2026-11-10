@@ -4,6 +4,8 @@ import sys
 import unittest
 from unittest import mock
 
+from _temp import temp_workdir
+
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "automation" / "scripts"))
@@ -62,11 +64,13 @@ class BoardServiceTest(unittest.TestCase):
         state = {"pid": 123, "port": 8771}
         with mock.patch.object(board_service, "discover_boards", return_value=[]), \
                 mock.patch.object(board_service, "current", return_value=state), \
-                mock.patch.object(board_service.runtime_state, "run_hidden") as run, \
+                mock.patch.object(
+                    board_service.runtime_state, "terminate_process", return_value=True
+                ) as terminate, \
                 mock.patch.object(board_service.time, "sleep"), \
                 mock.patch.object(board_service.runtime_state, "clear_state") as clear:
             self.assertEqual(board_service.stop(), 0)
-        run.assert_called_once_with(["taskkill", "/F", "/T", "/PID", "123"], capture_output=True)
+        terminate.assert_called_once_with(123, force=True)
         clear.assert_called_once_with("board")
 
     def test_start复用最早看板并清理重复实例(self):
@@ -76,18 +80,30 @@ class BoardServiceTest(unittest.TestCase):
         ]
         with mock.patch.object(board_service, "discover_boards", return_value=boards), \
                 mock.patch.object(board_service.runtime_state, "write_state") as write, \
-                mock.patch.object(board_service.runtime_state, "run_hidden") as run:
+                mock.patch.object(
+                    board_service.runtime_state, "terminate_process", return_value=True
+                ) as terminate:
             self.assertEqual(board_service.start_hidden(), 0)
         write.assert_called_once_with("board", boards[0])
-        run.assert_called_once_with(
-            ["taskkill", "/F", "/T", "/PID", "456"], capture_output=True
-        )
+        terminate.assert_called_once_with(456, force=True)
 
     def test_端口扫描失败时仍按状态和健康接口复用(self):
         state = {"pid": 123, "port": 8771}
         with mock.patch.object(board_service, "discover_boards", return_value=[]), \
                 mock.patch.object(board_service, "current", return_value=state):
             self.assertEqual(board_service.start_hidden(), 0)
+
+    def test_MAC看板使用独立后台会话(self):
+        state = {"pid": 123, "port": 8770}
+        with temp_workdir("board-service-") as tmp, \
+                mock.patch.object(board_service, "LOG", str(Path(tmp) / "board.log")), \
+                mock.patch.object(board_service, "discover_boards", return_value=[]), \
+                mock.patch.object(board_service, "current", side_effect=[{}, state]), \
+                mock.patch.object(board_service.runtime_state, "read_state", return_value={}), \
+                mock.patch.object(board_service.runtime_state, "IS_WINDOWS", False), \
+                mock.patch.object(board_service.subprocess, "Popen") as popen:
+            self.assertEqual(board_service.start_hidden(), 0)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
 
 if __name__ == "__main__":

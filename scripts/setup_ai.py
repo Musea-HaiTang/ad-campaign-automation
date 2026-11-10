@@ -13,11 +13,16 @@ import time
 import traceback
 import urllib.request
 
+from python_support import SUPPORTED_PYTHON_LABEL, supported_python
+
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / ".local"
 SETUP_RESULT = LOCAL / "setup-result.json"
 SETUP_LOG = LOCAL / "setup-ai.log"
+AUTOMATION_SCRIPTS = ROOT / "automation" / "scripts"
+if str(AUTOMATION_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AUTOMATION_SCRIPTS))
 
 
 class SetupError(RuntimeError):
@@ -91,22 +96,31 @@ def python_info(python: str) -> dict:
 
 def compatible(info: dict) -> bool:
     major, minor, _ = map(int, info["version"].split("."))
-    return major == 3 and 12 <= minor <= 14
+    return supported_python(major, minor)
+
+
+def venv_python_path() -> Path:
+    if sys.platform == "win32":
+        return ROOT / ".venv" / "Scripts" / "python.exe"
+    return ROOT / ".venv" / "bin" / "python"
 
 
 def ensure_venv() -> tuple[str, dict]:
     base = python_info(sys.executable)
     log(f"基础 Python：{base['version']} ({base['executable']})")
-    venv_python = ROOT / ".venv" / "Scripts" / "python.exe"
+    venv_python = venv_python_path()
     if not venv_python.exists():
         if not compatible(base):
-            raise SetupError("基础 Python 版本不在 3.12-3.14 范围内")
+            raise SetupError(f"基础 Python 版本不在 {SUPPORTED_PYTHON_LABEL} 范围内")
         run([sys.executable, "-m", "venv", str(ROOT / ".venv")])
     if not venv_python.exists():
         raise SetupError("创建 .venv 失败")
     info = python_info(str(venv_python))
     if not compatible(info):
-        raise SetupError(f".venv Python 版本不兼容：{info['version']}")
+        raise SetupError(
+            f".venv Python 版本不兼容：{info['version']}；"
+            f"需要 {SUPPORTED_PYTHON_LABEL}"
+        )
     log(f"虚拟环境：{info['version']} ({info['executable']})")
     return str(venv_python), info
 
@@ -171,42 +185,13 @@ def install_dependencies(python: str) -> None:
 
 
 def find_browser(kind: str) -> dict:
-    config_path = LOCAL / "browser.json"
-    if kind == "auto" and config_path.exists():
-        try:
-            saved = json.loads(config_path.read_text(encoding="utf-8"))
-            if saved.get("path") and Path(saved["path"]).exists():
-                return {"kind": saved.get("kind", "Edge"), "path": saved["path"]}
-        except (OSError, ValueError):
-            pass
+    import browser_broker
 
-    groups = []
-    if kind in ("auto", "edge"):
-        roots = [
-            os.environ.get("ProgramFiles(x86)"),
-            os.environ.get("ProgramFiles"),
-        ]
-        groups.append((
-            "Edge",
-            [Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
-             for root in roots if root],
-        ))
-    if kind in ("auto", "chrome"):
-        roots = [
-            os.environ.get("ProgramFiles"),
-            os.environ.get("ProgramFiles(x86)"),
-            os.environ.get("LOCALAPPDATA"),
-        ]
-        groups.append((
-            "Chrome",
-            [Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
-             for root in roots if root],
-        ))
-    for name, paths in groups:
-        for path in paths:
-            if path.exists():
-                return {"kind": name, "path": str(path)}
-    raise SetupError(f"没有找到请求的浏览器：{kind}")
+    try:
+        path = browser_broker.browser_exe(kind)
+    except RuntimeError as exc:
+        raise SetupError(str(exc)) from exc
+    return {"kind": browser_broker.browser_kind(path), "path": path}
 
 
 def ensure_owner(owner: str | None) -> str:
@@ -295,14 +280,25 @@ def run_tests(python: str) -> dict:
     return result
 
 
-def start_board(python: str) -> dict:
+def launch_board(python: str) -> None:
     vbs = ROOT / "web" / "start-hidden.vbs"
     service = ROOT / "automation" / "scripts" / "board_service.py"
-    try:
-        os.startfile(str(vbs), arguments="/quiet")
-    except (AttributeError, OSError) as exc:
-        raise SetupError(f"无法通过 Windows shell 启动看板：{exc}") from exc
-    log("已通过 Windows shell 启动看板")
+    if sys.platform == "win32":
+        try:
+            os.startfile(str(vbs), arguments="/quiet")
+        except (AttributeError, OSError) as exc:
+            raise SetupError(f"无法通过 Windows shell 启动看板：{exc}") from exc
+        log("已通过 Windows shell 启动看板")
+        return
+    completed = run([python, str(service), "--start"], timeout_seconds=45)
+    if completed.returncode != 0:
+        raise SetupError(f"启动看板失败（{completed.returncode}）\n{completed.stdout[-2000:]}")
+    log("已启动后台看板")
+
+
+def start_board(python: str) -> dict:
+    launch_board(python)
+    service = ROOT / "automation" / "scripts" / "board_service.py"
 
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + 30

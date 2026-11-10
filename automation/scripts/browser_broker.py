@@ -36,6 +36,7 @@
 import argparse
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -162,13 +163,26 @@ def status():
 
 # ---------- 起 / 关 ----------
 
-def _browser_kind(path):
-    return "Chrome" if os.path.basename(path).lower() == "chrome.exe" else "Edge"
+def browser_kind(path):
+    name = os.path.basename(str(path)).lower()
+    if "chrome" in name:
+        return "Chrome"
+    if "edge" in name or "msedge" in name:
+        return "Edge"
+    return "Chromium"
 
 
 def _browser_candidates(kind):
     paths = []
-    if kind == "Edge":
+    if sys.platform == "darwin":
+        apps = ("/Applications", os.path.expanduser("~/Applications"))
+        relatives = {
+            "Edge": ("Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge"),
+            "Chrome": ("Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+        }
+        paths = [posixpath.join(root, *relatives[kind]) for root in apps]
+        found = ""
+    elif kind == "Edge":
         for name in ("ProgramFiles(x86)", "ProgramFiles"):
             base = os.environ.get(name)
             if base:
@@ -214,7 +228,12 @@ def _configured_browser():
     return ""
 
 
-def browser_exe():
+def browser_exe(kind="auto"):
+    if kind != "auto":
+        found = _browser_candidates("Chrome" if kind == "chrome" else "Edge")
+        if found:
+            return found[0]
+        raise RuntimeError("指定的浏览器未安装：%s" % kind)
     configured = _configured_browser()
     if configured:
         return configured
@@ -235,6 +254,14 @@ def current_browser_path():
 def stray_pids(exe_path=None):
     """占着这个登录 profile 的浏览器进程号（查不到就空——权限不够时不猜）。"""
     exe_path = exe_path or current_browser_path()
+    if not runtime_state.IS_WINDOWS:
+        profile = os.path.normcase(PROFILE).replace("\\", "/")
+        found = []
+        for pid, command in runtime_state.process_commands().items():
+            normalized = os.path.normcase(command).replace("\\", "/")
+            if profile in normalized and "--user-data-dir" in normalized:
+                found.append(pid)
+        return sorted(found)
     process_name = os.path.basename(exe_path).lower()
     ps_exe = shutil.which("powershell") or shutil.which("pwsh")
     if not ps_exe:
@@ -264,10 +291,7 @@ def _kill_strays(what="清残留", exe_path=None):
         return 0
     log("  %s：%d 个浏览器进程（%s）" % (what, len(pids), "、".join(map(str, pids))))
     for pid in pids:
-        runtime_state.run_hidden(
-            ["taskkill", "/F", "/PID", str(pid)],
-            capture_output=True, text=True,
-        )
+        runtime_state.terminate_process(pid, force=True)
     time.sleep(1.5)
     return len(pids)
 
@@ -279,7 +303,7 @@ def _write_state(mode, pid, browser_path, port):
         "pid": pid,
         "port": int(port),
         "cdpUrl": cdp_url(port),
-        "browser": _browser_kind(browser_path),
+        "browser": browser_kind(browser_path),
         "browserPath": browser_path,
         "profile": PROFILE,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -298,9 +322,9 @@ def _launch(mode, port):
     else:
         args += ["--headless=new", "--window-size=%d,%d" % WINDOW]
     args.append("about:blank")
-    flags = 0x00000008 | 0x00000200                 # DETACHED_PROCESS | NEW_PROCESS_GROUP
     process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, creationflags=flags)
+                            stderr=subprocess.DEVNULL,
+                            **runtime_state.detached_process_kwargs())
     process.browser_path = browser_path
     process.browser_port = port
     return process
@@ -314,7 +338,7 @@ def _start(mode, port):
         if _responsive(port):
             _write_state(mode, proc.pid, proc.browser_path, port)
             return True
-        # 启动器秒退 = Windows 把命令转给了已经在跑的那只浏览器（profile 被占），别干等
+        # 启动器秒退 = 系统把命令转给了已经在跑的那只浏览器（profile 被占），别干等
         if proc.poll() is not None and time.time() > t0 + 2:
             break
         time.sleep(0.3)
@@ -402,9 +426,7 @@ def stop():
         log("公共浏览器：状态中的 PID %d 不是本项目浏览器，拒绝结束" % pid)
         return 0
     port = _state_port()
-    runtime_state.run_hidden(
-        ["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True
-    )
+    runtime_state.terminate_process(pid, force=True)
     time.sleep(1)
     runtime_state.clear_state("browser", pid=pid)
     if _responsive(port):
@@ -420,10 +442,15 @@ def stop():
                 % (result["cache_bytes_before"], result["cache_bytes_after"])
             )
         elif result["status"] == "needs_confirmation":
+            python_hint = (
+                ".venv\\Scripts\\python.exe"
+                if runtime_state.IS_WINDOWS else ".venv/bin/python"
+            )
             log(
                 "浏览器 profile 超过 1 GB，未自动清理。确认后运行："
-                ".venv\\Scripts\\python.exe automation\\scripts\\cleanup.py "
+                "%s automation/scripts/cleanup.py "
                 "--browser-profile --deep"
+                % python_hint
             )
     except Exception as exc:
         log("浏览器缓存：清理失败（不影响关闭）：%s" % str(exc).splitlines()[0][:160])

@@ -4,6 +4,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +18,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 WEB = os.path.join(REPO, "web")
 PREFERRED_PORT = 8770
 SERVICE = "ad_management-board"
-LOG = os.path.join(os.environ.get("TEMP") or REPO, "board_service.log")
+LOG = os.path.join(tempfile.gettempdir(), "board_service.log")
 V2_DB = os.path.join(REPO, "activities", "_db", "投放数据.db")
 
 
@@ -109,10 +110,7 @@ def start_hidden(preferred_port=PREFERRED_PORT, auto_minutes=30):
         running = boards[0]
         runtime_state.write_state("board", running)
         for duplicate in boards[1:]:
-            runtime_state.run_hidden(
-                ["taskkill", "/F", "/T", "/PID", str(duplicate["pid"])],
-                capture_output=True,
-            )
+            runtime_state.terminate_process(duplicate["pid"], force=True)
             log("看板服务：结束重复实例 PID %s，%s" % (
                 duplicate["pid"], board_url(duplicate["port"])
             ))
@@ -133,11 +131,11 @@ def start_hidden(preferred_port=PREFERRED_PORT, auto_minutes=30):
         runtime_state.clear_state("board", pid=stale.get("pid"))
 
     py = sys.executable
-    pyw = os.path.join(os.path.dirname(py), "pythonw.exe")
-    if os.path.isfile(pyw):
-        py = pyw
+    if runtime_state.IS_WINDOWS:
+        pyw = os.path.join(os.path.dirname(py), "pythonw.exe")
+        if os.path.isfile(pyw):
+            py = pyw
     with open(LOG, "w", encoding="utf-8", errors="replace") as logf:
-        flags = 0x00000008 | 0x00000200
         command = [
             py, "-u", "app.py", "--db", V2_DB,
             "--port", str(int(preferred_port)), "--auto", str(int(auto_minutes)),
@@ -148,7 +146,7 @@ def start_hidden(preferred_port=PREFERRED_PORT, auto_minutes=30):
             stdin=subprocess.DEVNULL,
             stdout=logf,
             stderr=subprocess.STDOUT,
-            creationflags=flags,
+            **runtime_state.detached_process_kwargs(),
         )
 
     deadline = time.time() + 25
@@ -175,9 +173,7 @@ def stop():
         return 0
     for running in boards:
         pid = int(running["pid"])
-        runtime_state.run_hidden(
-            ["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True
-        )
+        runtime_state.terminate_process(pid, force=True)
         log("看板服务：停掉进程 %d，%s（公共浏览器不动）" % (
             pid, board_url(running["port"])
         ))

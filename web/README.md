@@ -26,12 +26,22 @@
 - `web/browser-status.bat`：查看公共浏览器状态。
 - `web/scripts/browser-stop.bat`：关闭公共浏览器。
 
+以上双击入口只适用于 Windows。macOS 使用下方命令行入口，venv 解释器为 `.venv/bin/python`。
+
 命令行：
 
 ```powershell
 .venv\Scripts\python.exe automation/scripts/board_service.py --start
 .venv\Scripts\python.exe automation/scripts/board_service.py --status
 .venv\Scripts\python.exe automation/scripts/board_service.py --stop
+```
+
+macOS：
+
+```bash
+.venv/bin/python automation/scripts/board_service.py --start
+.venv/bin/python automation/scripts/board_service.py --status
+.venv/bin/python automation/scripts/board_service.py --stop
 ```
 
 服务默认使用 `http://127.0.0.1:8770/`；端口冲突时自动向后寻找。实际地址以 `board_service.py --status` 或 `--url` 为准。
