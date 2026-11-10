@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONUTF8: "1"
+
 jobs:
   verify:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -47,7 +50,7 @@ jobs:
           python -c "import json,pathlib,sys;
           p=pathlib.Path('.local/setup-result.json');
           d=json.loads(p.read_text(encoding='utf-8'));
-          print(json.dumps(d,ensure_ascii=False,indent=2));
+          print(d.get('status'));
           sys.exit(0 if d.get('status')=='ok' else 1)"
 
       - name: Show deployment result after failure
@@ -56,6 +59,9 @@ jobs:
         run: |
           if [ -f .local/setup-result.json ]; then
             cat .local/setup-result.json
+          fi
+          if [ -f .local/test-results.json ]; then
+            cat .local/test-results.json
           fi
           if [ -f .local/setup-ai.log ]; then
             tail -n 200 .local/setup-ai.log
