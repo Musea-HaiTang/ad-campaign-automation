@@ -47,10 +47,11 @@ class RuntimeStateTest(unittest.TestCase):
   TCP    127.0.0.1:8777    0.0.0.0:0    LISTENING    456
   TCP    127.0.0.1:9000    0.0.0.0:0    LISTENING    789
 """
-        with mock.patch.object(
-            runtime_state, "run_hidden",
-            return_value=mock.Mock(stdout=rows),
-        ):
+        with mock.patch.object(runtime_state, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    runtime_state, "run_hidden",
+                    return_value=mock.Mock(stdout=rows),
+                ):
             self.assertEqual(runtime_state.listening_ports(8770, 10), [8770, 8777])
 
     def test_MAC解析_LSOF监听端口(self):
