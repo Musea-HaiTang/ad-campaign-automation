@@ -96,6 +96,8 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(failures, [])
 
     def test_数据平台导航到第二个页面(self):
+        events = []
+
         class Page:
             def __init__(self):
                 self.url = ""
@@ -112,25 +114,29 @@ class DoctorTest(unittest.TestCase):
 
         for login in (True, False):
             with self.subTest(login=login):
+                events.clear()
                 admin_page = Page()
                 data_page = Page()
                 context = mock.Mock()
                 context.new_page.side_effect = [admin_page, data_page]
                 broker = types.SimpleNamespace(
-                    ensure=lambda _mode: None,
+                    ensure=lambda _mode: events.append(("browser", None)),
                     connect=lambda _playwright: context,
                 )
+
+                def probe_admin(page):
+                    events.append(("admin", page.url))
+                    return page.url == "https://admin.example", "admin"
+
+                def probe_databi(page, navigate=True):
+                    events.append(("data", page.url))
+                    return page.url == "https://data.example", "data"
+
                 wait_login = types.SimpleNamespace(
                     DEFAULT_URL="https://admin.example",
                     DATABI_URL="https://data.example",
-                    probe_admin=lambda page: (
-                        page.url == "https://admin.example",
-                        "admin",
-                    ),
-                    probe_databi=lambda page, navigate=True: (
-                        page.url == "https://data.example",
-                        "data",
-                    ),
+                    probe_admin=probe_admin,
+                    probe_databi=probe_databi,
                     ui=types.SimpleNamespace(
                         login_identity=lambda _page: {"userName": "tester"}
                     ),
@@ -146,12 +152,25 @@ class DoctorTest(unittest.TestCase):
                     "browser_broker": broker,
                     "wait_login": wait_login,
                     "playwright.sync_api": playwright_module,
-                }), mock.patch.object(doctor, "write_ad_username"):
+                }), mock.patch.object(doctor, "write_ad_username"), \
+                        mock.patch(
+                            "builtins.print",
+                            side_effect=lambda *_args, **_kwargs: events.append(
+                                ("print", None)
+                            ),
+                        ):
                     doctor.check_logins(login, 0, failures, operator_ok=True)
 
                 self.assertEqual(admin_page.url, "https://admin.example")
                 self.assertEqual(data_page.url, "https://data.example")
                 self.assertEqual(failures, [])
+                browser_index = events.index(("browser", None))
+                admin_index = events.index(("admin", "https://admin.example"))
+                data_index = events.index(("data", "https://data.example"))
+                self.assertLess(browser_index, admin_index)
+                self.assertLess(browser_index, data_index)
+                if login:
+                    self.assertGreater(browser_index, 0)
 
 
 if __name__ == "__main__":

@@ -279,19 +279,43 @@ def check_database(failures: list[str]) -> None:
         report(False, "数据库", str(exc), "检查数据库文件、schema_version 和外键。", failures)
 
 
-def wait_for_probe(page: Any, probe: Any, label: str, login: bool, minutes: float) -> tuple[bool, str]:
+def probe_login(page: Any, probe: Any, label: str) -> tuple[bool, str]:
+    try:
+        ok, detail = probe(page)
+    except Exception as exc:
+        ok, detail = False, str(exc).splitlines()[0][:160]
+    print(f"  {label}: {'OK' if ok else 'WAIT'} | {detail}", flush=True)
+    return ok, detail
+
+
+def wait_for_both_logins(
+    admin_page: Any,
+    data_page: Any,
+    admin_probe: Any,
+    data_probe: Any,
+    login: bool,
+    minutes: float,
+) -> tuple[tuple[bool, str], tuple[bool, str]]:
+    admin = (False, "")
+    data = (False, "")
     deadline = time.monotonic() + (minutes * 60 if login else 0)
-    while True:
-        try:
-            ok, detail = probe(page)
-        except Exception as exc:
-            ok, detail = False, str(exc).splitlines()[0][:160]
-        print(f"  {label}: {'OK' if ok else 'WAIT'} | {detail}")
-        if ok:
-            return True, detail
+    while not (admin[0] and data[0]):
+        if not admin[0]:
+            admin = probe_login(admin_page, admin_probe, "广告后台")
+        if not data[0]:
+            data = probe_login(data_page, data_probe, "数据平台")
+        if admin[0] and data[0]:
+            break
         if not login or time.monotonic() >= deadline:
-            return False, detail
+            break
         time.sleep(5)
+    return admin, data
+
+
+def explain_login_pages() -> None:
+    print("登录验收即将开始。", flush=True)
+    print("接下来会同时打开 CSDN 广告后台和 data.csdn.net。", flush=True)
+    print("两个页面都需要你本人登录，顺序不限；登录期间请不要关闭浏览器。", flush=True)
 
 
 def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: bool) -> None:
@@ -312,6 +336,8 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
         ".venv\\Scripts\\python.exe scripts\\doctor.py --login"
         if sys.platform == "win32" else ".venv/bin/python scripts/doctor.py --login"
     )
+    if login:
+        explain_login_pages()
     try:
         browser_broker.ensure("headed" if login else "headless")
         with sync_playwright() as playwright:
@@ -324,13 +350,20 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
                     wait_until="domcontentloaded",
                     timeout=30000,
                 )
+                data_page.goto(
+                    wait_login.DATABI_URL,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
                 admin_page.wait_for_timeout(1000)
+                data_page.wait_for_timeout(1000)
                 if login:
-                    print("请在弹出的浏览器中登录 CSDN 广告后台。")
-                admin_ok, admin_detail = wait_for_probe(
+                    print("两个登录页已打开，请直接完成登录。", flush=True)
+                (admin_ok, admin_detail), (data_ok, data_detail) = wait_for_both_logins(
                     admin_page,
+                    data_page,
                     wait_login.probe_admin,
-                    "广告后台",
+                    lambda page: wait_login.probe_databi(page, navigate=False),
                     login,
                     minutes,
                 )
@@ -346,22 +379,6 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
                         f"运行 {login_hint}",
                         failures,
                     )
-
-                data_page.goto(
-                    wait_login.DATABI_URL,
-                    wait_until="domcontentloaded",
-                    timeout=30000,
-                )
-                data_page.wait_for_timeout(1000)
-                if login:
-                    print("请在浏览器中登录 CSDN 数据平台 data.csdn.net。")
-                data_ok, data_detail = wait_for_probe(
-                    data_page,
-                    lambda page: wait_login.probe_databi(page, navigate=False),
-                    "数据平台",
-                    login,
-                    minutes,
-                )
                 report(
                     data_ok,
                     "数据平台登录",
@@ -381,7 +398,7 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="检查项目运行环境")
-    parser.add_argument("--login", action="store_true", help="打开浏览器，等待两个 CSDN 站点分别登录")
+    parser.add_argument("--login", action="store_true", help="同时打开两个 CSDN 站点并等待登录")
     parser.add_argument("--minutes", type=float, default=15.0, help="每个站点最多等待多少分钟")
     args = parser.parse_args()
 
