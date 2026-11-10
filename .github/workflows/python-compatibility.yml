@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: python-compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   PYTHONUTF8: "1"
 
