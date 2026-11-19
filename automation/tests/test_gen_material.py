@@ -73,6 +73,20 @@ def fake_definition(n_copies=3):
 
 
 class GenMaterialTest(unittest.TestCase):
+    def test_动态文案会转义成文本(self):
+        d = fake_definition(1)
+        d["activity"]["title"] = "<script>alert(1)</script>"
+        d["buckets"][0]["copies"][0]["title"] = '</span><img src=x onerror=alert(1)>'
+        with temp_workdir("gen-material-escape-") as tmp:
+            out = pathlib.Path(tmp) / "material.html"
+            gen_material.build(d, out)
+            html = out.read_text(encoding="utf-8")
+
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertIn("&lt;/span&gt;&lt;img src=x onerror=alert(1)&gt;", html)
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertNotIn("</span><img src=x onerror=alert(1)>", html)
+
     def test_物料显示文案分类且无残留占位符(self):
         with temp_workdir("gen-material-") as tmp:
             out = pathlib.Path(tmp) / "material.html"

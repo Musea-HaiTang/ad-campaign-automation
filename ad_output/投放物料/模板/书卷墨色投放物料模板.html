@@ -39,7 +39,7 @@
  .lbl::after { content: ''; flex: 1; height: 1px; background: var(--line); }
  .lbl .tag { background: var(--seal); color: var(--paper); border-radius: 2px; padding: 1px 8px; font-size: 12px; letter-spacing: 0; font-family: var(--serif); font-weight: 700; }
  .res { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
- .res-item { border: 1px solid var(--line); border-radius: 3px; padding: 14px 15px; background: #fffdf6; position: relative; padding-right: 40px; }
+ .res-item { border: 1px solid var(--line); border-radius: 3px; padding: 14px 15px; background: #fffdf6; position: relative; }
  .res-item::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--seal-line); opacity: 0.45; }
  .res-role { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: var(--ink-2); border: 1px solid var(--line); border-radius: 2px; padding: 1px 7px; margin-bottom: 8px; font-family: var(--serif); }
  .res-role.ctrl { color: var(--seal-ink); border-color: var(--seal-line); background: var(--seal-soft); }
@@ -57,30 +57,6 @@
  .cp-tip { position: fixed; z-index: 9999; background: var(--seal-ink); color: #fff8ec; font-family: var(--serif); font-size: 12px; letter-spacing: .08em; padding: 4px 10px; border-radius: 2px; pointer-events: none; opacity: 0; transition: opacity .15s; box-shadow: 0 2px 6px rgba(60,30,10,.25); }
  .cp-tip.show { opacity: 1; }
  .kw-note { font-size: 11px; color: var(--muted); margin-top: 8px; }
- .fix-btn { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; line-height: 24px; text-align: center; font-family: var(--serif); font-size: 12px; font-weight: 700; color: var(--paper); background: var(--seal); border: 1px solid var(--seal-ink); border-radius: 3px; padding: 0; cursor: pointer; box-shadow: 0 1px 3px rgba(120,50,30,0.35); user-select: none; opacity: 0.85; transition: opacity 0.15s, transform 0.15s; }
- .fix-btn:hover { opacity: 1; transform: scale(1.08); }
- .fix-btn:active { transform: scale(0.95); }
- .fix-overlay { display: none; position: fixed; inset: 0; background: rgba(43,38,26,0.45); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
- .fix-overlay.show { display: flex; }
- .fix-modal { background: var(--card); border: 1px double var(--line); border-radius: 4px; max-width: 560px; width: 100%; padding: 22px 26px 20px; box-shadow: 0 12px 40px rgba(60,45,20,0.25); }
- .fix-modal h4 { margin: 0 0 2px; font-family: var(--serif); font-size: 17px; letter-spacing: 0.06em; }
- .fix-modal .sub { font-size: 12px; color: var(--ink-2); margin-bottom: 14px; }
- .fix-meta { font-size: 12px; color: var(--ink-2); background: var(--paper); border: 1px solid var(--line); border-radius: 3px; padding: 8px 12px; margin-bottom: 12px; line-height: 1.8; }
- .fix-meta b { color: var(--seal-ink); }
- .fix-meta .src { font-family: var(--serif); }
- .fix-modal .row { margin-bottom: 10px; }
- .fix-modal .row .lab { font-size: 11px; color: var(--muted); letter-spacing: 0.14em; margin-bottom: 3px; font-family: var(--serif); }
- .fix-modal textarea { width: 100%; border: 1px solid var(--line); border-radius: 3px; background: #fffdf6; color: var(--ink); font-family: var(--sans); font-size: 13px; line-height: 1.6; padding: 8px 10px; resize: vertical; min-height: 70px; }
- .fix-modal textarea:focus { outline: none; border-color: var(--seal-line); }
- .fix-radio { display: inline-flex; gap: 4px; margin-right: 14px; align-items: center; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
- .fix-radio input { accent-color: var(--seal); margin-right: 4px; }
- .fix-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
- .fix-actions button { font-family: var(--serif); font-size: 13px; letter-spacing: 0.08em; border-radius: 2px; padding: 6px 16px; cursor: pointer; }
- .fix-copy { background: var(--seal); border: 1px solid var(--seal); color: var(--paper); }
- .fix-copy:hover { background: var(--seal-ink); }
- .fix-close { background: transparent; border: 1px solid var(--line); color: var(--ink-2); }
- .fix-close:hover { border-color: var(--muted); }
- .fix-ok { font-size: 12px; color: var(--seal-ink); margin-top: 6px; text-align: right; min-height: 18px; }
  .endmark { text-align: center; margin-top: 6px; font-family: var(--serif); font-size: 11px; letter-spacing: 0.4em; color: var(--muted); }
  .endmark .seal { display: inline-block; background: var(--seal); color: var(--paper); padding: 2px 8px; border-radius: 2px; letter-spacing: 0.2em; font-size: 11px; margin-left: 6px; }
  @media (max-width: 760px) { .sheet { padding: 18px 14px 28px; } .res { grid-template-columns: 1fr; } }
@@ -113,7 +89,6 @@
  <div class="res">
 <!-- RES:1:START -->
  <div class="res-item">
- <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
  <span class="res-role ctrl">对照</span>
  <div class="f"><span class="v">{{TITLE_A}}</span></div>
  <div class="f desc"><span class="v">{{DESC_A}}</span></div>
@@ -123,7 +98,6 @@
 <!-- RES:1:END -->
 <!-- RES:2:START -->
  <div class="res-item">
- <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
  <span class="res-role">实验1</span>
  <div class="f"><span class="v">{{TITLE_B}}</span></div>
  <div class="f desc"><span class="v">{{DESC_B}}</span></div>
@@ -133,7 +107,6 @@
 <!-- RES:2:END -->
 <!-- RES:3:START -->
  <div class="res-item">
- <button type="button" class="fix-btn" title="不满意？让 AI 修改">改</button>
  <span class="res-role">实验2</span>
  <div class="f"><span class="v">{{TITLE_C}}</span></div>
  <div class="f desc"><span class="v">{{DESC_C}}</span></div>
@@ -154,33 +127,9 @@
  </div>
 </div>
 
-<div class="fix-overlay" id="fixOverlay">
- <div class="fix-modal">
- <h4>请 AI 修改这条广告</h4>
- <div class="sub">点击下方按钮复制请求 → 粘贴到对话中发给 AI，AI 会改完并同步更新本页。</div>
- <div class="fix-meta" id="fixMeta"></div>
- <div class="row">
- <span class="lab">不满意的是</span><br>
- <label class="fix-radio"><input type="radio" name="fixTarget" value="标题" checked> 标题</label>
- <label class="fix-radio"><input type="radio" name="fixTarget" value="描述"> 描述</label>
- <label class="fix-radio"><input type="radio" name="fixTarget" value="标题和描述"> 标题和描述</label>
- </div>
- <div class="row">
- <div class="lab">你的要求 / 哪里不满意 / 想怎么改（或直接给新文案）</div>
- <textarea id="fixNote" placeholder="例：标题太抽象，不吸引人。想要直白一点，强调免费和 80 元券。"></textarea>
- </div>
- <div class="fix-actions">
- <button class="fix-close" id="fixClose">关闭</button>
- <button class="fix-copy" id="fixCopy">复制修改请求</button>
- </div>
- <div class="fix-ok" id="fixOk"></div>
- </div>
-</div>
 <script>
 (function () {
  function $(id) { return document.getElementById(id); }
- var overlay = $('fixOverlay');
- if (!overlay) { return; }
  var cpTipEl = null;
  function showCpTip(x, y, msg) {
   if (!cpTipEl) { cpTipEl = document.createElement('div'); cpTipEl.className = 'cp-tip'; document.body.appendChild(cpTipEl); }
@@ -204,16 +153,6 @@
  return navigator.clipboard.writeText(txt).then(function(){ return true; }, function(){ return false; });
  }
  return Promise.resolve(false);
- }
- function buildReq(target, note, cur) {
- var lines = [];
- lines.push('【修改广告】投放物料');
- lines.push('目标：' + cur.grp + ' · ' + cur.role);
- lines.push('修改对象：' + target);
- lines.push('标题原文：' + (cur.title || '（空）'));
- lines.push('描述原文：' + (cur.desc || '（空）'));
- lines.push('修改要求：' + (note || '（未填，请 AI 按常识判断怎么改更好）'));
- return lines.join('\\n');
  }
  document.addEventListener('click', function (e) {
  var btn = e.target;
@@ -264,42 +203,7 @@
   }
   return;
  }
- if (!btn.classList.contains('fix-btn')) return;
- var card = btn.closest('.res-item');
- if (!card) return;
- var g = card.closest('.grp');
- var grp = '';
- if (g) { var ln = g.querySelector('.grp-letter'); var nm = g.querySelector('.grp-name'); grp = (ln ? ln.textContent : '') + '类 · ' + (nm ? nm.textContent : ''); }
- var r = card.querySelector('.res-role');
- var role = r ? r.textContent : '';
- var t = card.querySelector('.f:not(.desc) .v');
- var d = card.querySelector('.f.desc .v');
- var title = t ? t.textContent : ''; var desc = d ? d.textContent : '';
- var cur = { grp: grp, role: role, title: title, desc: desc };
- var metaEl = $('fixMeta'), noteEl = $('fixNote'), okEl = $('fixOk');
- if (metaEl) {
- metaEl.innerHTML = '<div class="src"><b>目标广告：</b>' + grp + ' · ' + role + '</div>'
- + '<div><b>标题原文：</b>' + (title || '（空）') + '</div>'
- + '<div><b>描述原文：</b>' + (desc || '（空）') + '</div>';
- }
- if (noteEl) noteEl.value = ''; if (okEl) okEl.textContent = '';
- overlay.classList.add('show');
- var copyBtn = $('fixCopy');
- if (copyBtn) {
- copyBtn.onclick = function () {
- var checked = document.querySelector('input[name="fixTarget"]:checked');
- var target = checked ? checked.value : '标题和描述';
- var note = noteEl ? noteEl.value.trim() : '';
- var req = buildReq(target, note, cur);
- copyText(req).then(function (ok) {
- if (okEl) okEl.textContent = ok ? ' 已复制，请粘贴到对话发给 AI' : ' 复制失败，请手动全选上方文字复制';
  });
- };
- }
- });
- var closeBtn = $('fixClose');
- if (closeBtn) closeBtn.onclick = function () { overlay.classList.remove('show'); };
- overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.classList.remove('show'); });
 })();
 </script>
 </body>

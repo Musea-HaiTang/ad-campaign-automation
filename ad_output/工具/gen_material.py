@@ -16,6 +16,7 @@
 本脚本按 `len(buckets)` 复制 N 份 → 4–7 类都成立（不再要求恰好 7 类）。
 """
 import argparse
+from html import escape
 import re
 import sys
 from pathlib import Path
@@ -107,7 +108,7 @@ def render_bucket(block, camp, b, i):
         pattern = r"<!-- RES:%d:START -->.*?<!-- RES:%d:END -->" % (index, index)
         block = re.sub(pattern, "", block, flags=re.S)
     for k, v in m.items():
-        block = block.replace("{{%s}}" % k, str(v))
+        block = block.replace("{{%s}}" % k, escape(str(v), quote=True))
     return block
 
 
@@ -126,7 +127,7 @@ def build(d, out_path):
         "END_SEAL": act.get("endSeal", ""),
     }
     for k, v in head.items():
-        html = html.replace("{{%s}}" % k, str(v))
+        html = html.replace("{{%s}}" % k, escape(str(v), quote=True))
 
     m = BUCKET_BLOCK.search(html)
     if not m:

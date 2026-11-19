@@ -254,7 +254,24 @@ class FetchAllTest(WebBase):
 
         Fake.do_GET = webapp.Handler.do_GET
         Fake.do_POST = webapp.Handler.do_POST
+        Fake._static = webapp.Handler._static
         return Fake()
+
+    def test_静态资源拒绝目录外路径(self):
+        static = self.tmp / "static"
+        static.mkdir()
+        (static / "index.html").write_text("ok", encoding="utf-8")
+        (self.tmp / "outside.txt").write_text("secret", encoding="utf-8")
+        with mock.patch.object(webapp, "STATIC", static):
+            fake = self._handler("/")
+            fake._static("index.html")
+            self.assertEqual(fake.sent.pop(0)[0], 200)
+
+            fake._static("../outside.txt")
+            code, body = fake.sent.pop(0)
+
+        self.assertEqual(code, 404)
+        self.assertNotIn("secret", body)
 
     def test_接口_all参数下POST跑全部活动(self):
         self._two_activities()
