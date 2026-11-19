@@ -1,0 +1,102 @@
+# -*- coding: utf-8 -*-
+"""批次 YAML 自检的测试（纯离线，不连后台）。
+
+盯住 2026-10-08 真踩过的两条（都在 2 资源桶上）：
+  ① 权重必须按资源数算（2 条 = 50/50，3 条 = 34/33/33，合计 100）；
+  ② AB 行位次不能跳（只能是 对照组 / 实验组1 / 实验组2 的前 N 个），
+     以及配套的「资源名角色段 ↔ 槽位」「新建资源必须被引用」。
+"""
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+
+from automation.scripts.commands import check_batch_plan as cbp  # noqa: E402
+
+CAMP = {"namePrefix": "测试活动-hang"}
+
+
+def aud(bid="D", n=2, labels=None, weights=None, names=None, ab_test=None):
+    labels = labels or cbp.LABELS[:n]
+    weights = weights or cbp.WEIGHTS[n]
+    names = names or ["测试活动-hang-%s类 · %s-9" % (bid, cbp.ROLE_OF_LABEL[l]) for l in labels]
+    item = {"id": bid, "taskName": "测试活动-hang-%s类" % bid, "nameSuffix": "-9",
+            "resources": [{"role": {"对照": "control", "实验1": "experiment1", "实验2": "experiment2"}[
+                cbp.ROLE_OF_LABEL[l]], "name": names[i]} for i, l in enumerate(labels)],
+            "abGroups": [{"label": l, "resource": names[i], "weightPct": weights[i]}
+                         for i, l in enumerate(labels)]}
+    if ab_test is not None:
+        item["abTest"] = ab_test
+    return item
+
+
+class CheckBatchPlanTest(unittest.TestCase):
+    def test_两资源桶必须5050(self):
+        errs = cbp.check_audience(aud(weights=[34, 33]), CAMP)
+        self.assertTrue(any("50/50" in e for e in errs), errs)          # 就是后台拒的那条
+
+    def test_三资源桶3420三三(self):
+        self.assertEqual(cbp.check_audience(aud(n=3), CAMP), [])
+
+    def test_位次不能跳(self):
+        errs = cbp.check_audience(aud(labels=["对照组", "实验组2"], weights=[50, 50]), CAMP)
+        self.assertTrue(any("位次" in e for e in errs), errs)           # 「实验组1资源ID不能为空」的根因
+
+    def test_名字角色段要和槽位一致(self):
+        a = aud(labels=["对照组", "实验组1"])
+        a["abGroups"][1]["resource"] = "测试活动-hang-D类 · 实验2-9"
+        a["resources"][1]["name"] = "测试活动-hang-D类 · 实验2-9"
+        errs = cbp.check_audience(a, CAMP)
+        self.assertTrue(any("角色" in e for e in errs), errs)
+
+    def test_新建资源必须被引用(self):
+        a = aud()
+        a["resources"].append({"role": "experiment2", "name": "测试活动-hang-D类 · 实验2-9"})
+        errs = cbp.check_audience(a, CAMP)
+        self.assertTrue(any("孤儿" in e for e in errs), errs)
+
+    def test_缺后缀要报(self):
+        a = aud()
+        a.pop("nameSuffix")
+        self.assertTrue(any("nameSuffix" in e for e in cbp.check_audience(a, CAMP)))
+
+    def test_工单字段(self):
+        self.assertTrue(cbp.check_task_order({}))                        # 什么都没有 → 报错
+        self.assertEqual(cbp.check_task_order({
+            "price": 30, "taskGroup": "T", "deliveryDate": {
+                "start": "2026-10-08", "end": "2026-10-12", "timeStart": 8, "timeEnd": 23}}), [])
+
+    def test_单资源长期单(self):
+        """`taskOrder.abTest: false`（2026-10-12 加）：只挂 1 条资源、没有流量占比。
+
+        后台那一步选「AB测试 = 否」时的形态（真机勘察 `_tmp/_probe_no_ab.py`）——
+        位次 / 权重 / 角色段三条规则都不适用，但「只能 1 条」要卡住。
+        """
+        a = aud(n=1, labels=["对照组"], weights=[None])
+        self.assertTrue(any("AB 组数 1" in e for e in cbp.check_audience(a, CAMP)), "缺省 AB=是 时 1 条应报错")
+        self.assertEqual(cbp.check_audience(a, CAMP, ab_test=False), [])
+        two = aud(n=2)
+        self.assertTrue(any("只能写 1 条" in e for e in cbp.check_audience(two, CAMP, ab_test=False)))
+
+    def test_混合桶逐桶解析AB模式(self):
+        one = aud(bid="A", n=1, labels=["对照组"], weights=[None], ab_test=False)
+        three = aud(bid="B", n=3, ab_test=True)
+        doc = {
+            "campaign": CAMP,
+            "audiences": [one, three],
+            "taskOrder": {
+                "price": 30,
+                "taskGroup": "T",
+                "deliveryDate": {
+                    "start": "2026-10-08",
+                    "end": "2026-10-12",
+                    "timeStart": 8,
+                    "timeEnd": 23,
+                },
+            },
+        }
+        self.assertEqual(cbp.check_doc(doc), [])
+
+if __name__ == "__main__":
+    unittest.main()

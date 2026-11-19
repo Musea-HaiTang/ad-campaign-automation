@@ -1,0 +1,128 @@
+# 示例活动（脱敏）：一份能过契约的整活动 YAML。所有值都是占位符，照它写你自己的活动。
+# 离线自检：python -m automation.scripts check-batch-plan --config activities/_示例活动/配置/示例活动-hang.yaml
+version: 1
+adType: blog-page-t0
+label: 示例活动-hang-3类
+controls:
+  channelType: 页面类
+  channel: PC博客详情页-新模版-T0
+  materialPath:
+  - 动态广告
+  - 其它
+  username: sample-user
+  defaults:
+    businessLine: 示例事业部
+    isPopup: false
+    adClient: 广告
+    closeBtnColor: 浅色
+  fields:
+    link:
+      placeholder: 请输入URL解析
+    title:
+      placeholder: 解析自动生成标题
+    username:
+      placeholder: 解析自动生成用户名
+    summary:
+      placeholder: 解析自动生成描述
+      type: textarea
+campaign:
+  brand: 示例活动
+  owner: hang
+  namePrefix: 示例活动-hang
+  taskGroupName: 示例活动-hang
+  activityLink: https://example.com/activity
+audiences:
+- id: A
+  reviewThresholdExposure: 3000
+  topic: 示例人群 A / 写代码的人
+  target: 用 AI 工具写代码的开发者（示例）
+  taskName: 示例活动-hang-A类
+  subBusinessLine: 示例业务线
+  distributionList: 示例活动-hang-A类 · 示例人群-1
+  keywordGroup:
+    keywords: 示例关键词1,示例关键词2,代码助手,编程助手,提示词
+  resources:
+  - role: control
+    name: 示例活动-hang-A类 · 对照
+    title: 示例标题（对照）：同一人群只换文案
+    summary: 示例摘要（对照）——同一个客群只换文案，才比得出哪句话有吸引力。
+    angleKey: A-场景痛点
+    presentationType: direct_marketing
+    styleKey: regular
+    validationSlot: first_test
+  - role: experiment1
+    name: 示例活动-hang-A类 · 实验1
+    title: 示例标题（实验1）：换个角度说
+    summary: 示例摘要（实验1）——同一个客群换一个角度说。
+    angleKey: A-工作流
+    presentationType: disguised_post
+    styleKey: adaptation
+    validationSlot: first_test
+  - role: experiment2
+    name: 示例活动-hang-A类 · 实验2
+    title: 示例标题（实验2）
+    summary: 示例摘要（实验2）
+    angleKey: A-成本
+    presentationType: direct_marketing
+    styleKey: antithesis
+    validationSlot: first_test
+  abGroups:
+  - label: 对照组
+    resource: 示例活动-hang-A类 · 对照
+    weightPct: 34
+  - label: 实验组1
+    resource: 示例活动-hang-A类 · 实验1
+    weightPct: 33
+  - label: 实验组2
+    resource: 示例活动-hang-A类 · 实验2
+    weightPct: 33
+- id: B
+  reviewThresholdExposure: 1500
+  topic: 示例人群 B / 剪视频的人
+  target: 做短视频与素材批量处理的人（示例）
+  taskName: 示例活动-hang-B类
+  subBusinessLine: 示例业务线
+  distributionList: 示例活动-hang-B类 · 示例人群-1
+  keywordGroup:
+    keywords: 示例关键词3,剪辑,转码,字幕
+  resources:
+  - role: control
+    name: 示例活动-hang-B类 · 对照
+    title: 示例标题（B 桶对照）
+    summary: 示例摘要（B 桶对照）——这个桶只挂 2 条资源，演示"2 资源桶"。
+    angleKey: B-处理速度
+    presentationType: disguised_post
+    styleKey: poetry_reference
+    validationSlot: first_test
+  - role: experiment1
+    name: 示例活动-hang-B类 · 实验1
+    title: 示例标题（B 桶实验1）
+    summary: 示例摘要（B 桶实验1）
+    angleKey: B-批量任务
+    presentationType: direct_marketing
+    styleKey: regular
+    validationSlot: first_test
+  abGroups:
+  - label: 对照组
+    resource: 示例活动-hang-B类 · 对照
+    weightPct: 50
+  - label: 实验组1
+    resource: 示例活动-hang-B类 · 实验1
+    weightPct: 50
+taskOrder:
+  businessLine: 示例事业部
+  taskGroup: 示例活动-hang
+  taskName: 示例活动-hang-A类 · 示例人群 A / 写代码的人
+  channel: PC博客详情页-新模版-T0
+  channelSizeId: 后台点渠道自动带上
+  price: 30
+  deliveryDate:
+    mode: set_time
+    start: '2026-01-05'
+    end: '2026-01-20'
+    timeStart: 8
+    timeEnd: 23
+  exposureCaps:
+    daily: 100000
+    weekly: 500000
+    total: 500000

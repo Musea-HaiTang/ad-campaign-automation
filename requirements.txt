@@ -1,0 +1,10 @@
+# Runtime and test dependencies.
+# Windows: .venv\Scripts\python.exe -m pip install -r requirements.txt
+# macOS:   .venv/bin/python -m pip install -r requirements.txt
+
+pyyaml>=6.0
+
+# Keep Playwright pinned so all operators use the same automation runtime.
+playwright==1.61.0
+
+pytest>=8.0
