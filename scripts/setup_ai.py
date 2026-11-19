@@ -375,6 +375,7 @@ def main() -> int:
         print("SETUP: OK")
         print(f"部署结果: {SETUP_RESULT}")
         print("下一步：运行 scripts/doctor.py --login，并在打开的浏览器中完成 CSDN 登录。")
+        print("登录完成后：先告知用户将进行不提交彩排，再运行 scripts/doctor.py --rehearsal。")
         return 0
     except Exception as exc:
         with SETUP_LOG.open("a", encoding="utf-8") as handle:
