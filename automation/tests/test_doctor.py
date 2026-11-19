@@ -172,6 +172,48 @@ class DoctorTest(unittest.TestCase):
                 if login:
                     self.assertGreater(browser_index, 0)
 
+    def test_彩排命令固定配置且永不提交(self):
+        commands = doctor.rehearsal_commands()
+
+        self.assertEqual(
+            [name for name, _command in commands],
+            ["check-batch-plan", "run-ads", "run-taskorder"],
+        )
+        self.assertTrue(
+            all(str(doctor.REHEARSAL_CONFIG) in command for _name, command in commands)
+        )
+        self.assertTrue(all("--headed" in command for _name, command in commands[1:]))
+        self.assertTrue(
+            all("--reset-progress" in command for _name, command in commands[1:])
+        )
+        self.assertFalse(any("--submit" in command for _name, command in commands))
+
+    def test_未确认时不执行彩排(self):
+        run = mock.Mock()
+        with mock.patch("builtins.print"):
+            result = doctor.run_rehearsal(confirm=lambda _prompt: "取消", run=run)
+
+        self.assertEqual(result, 1)
+        run.assert_not_called()
+
+    def test_确认后依次执行并遇错停止(self):
+        commands = doctor.rehearsal_commands()
+        outcomes = [
+            types.SimpleNamespace(returncode=0),
+            types.SimpleNamespace(returncode=1),
+        ]
+        run = mock.Mock(side_effect=outcomes)
+        with mock.patch("builtins.print"):
+            result = doctor.run_rehearsal(
+                confirm=lambda _prompt: "开始彩排",
+                run=run,
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0], commands[0][1])
+        self.assertEqual(run.call_args_list[1].args[0], commands[1][1])
+
 
 if __name__ == "__main__":
     unittest.main()

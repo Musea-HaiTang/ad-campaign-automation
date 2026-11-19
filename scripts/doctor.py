@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import time
 from typing import Any
@@ -28,6 +29,10 @@ DB_PATH = REPO / "activities" / "_db" / "投放数据.db"
 OPERATOR_PATH = REPO / ".local" / "operator.json"
 PREFERRED_DASHBOARD_PORT = 8770
 PREFERRED_CDP_PORT = 9222
+REHEARSAL_CONFIG = (
+    REPO / "activities" / "_示例活动" / "配置" / "rehearsal-腾讯云产品-hang.yaml"
+)
+REHEARSAL_CONFIRMATION = "开始彩排"
 
 
 def report(ok: bool, label: str, detail: str = "", fix: str = "",
@@ -402,9 +407,52 @@ def check_logins(login: bool, minutes: float, failures: list[str], operator_ok: 
         report(False, "CSDN 登录", str(exc).splitlines()[0][:200], "检查浏览器启动和登录 profile。", failures)
 
 
+def rehearsal_commands() -> list[tuple[str, list[str]]]:
+    base = [sys.executable, "-u", "-m", "automation.scripts"]
+    config = str(REHEARSAL_CONFIG)
+    return [
+        ("check-batch-plan", [*base, "check-batch-plan", "--config", config]),
+        (
+            "run-ads",
+            [*base, "run-ads", "--config", config, "--headed", "--reset-progress"],
+        ),
+        (
+            "run-taskorder",
+            [*base, "run-taskorder", "--config", config, "--headed", "--reset-progress"],
+        ),
+    ]
+
+
+def run_rehearsal(
+    confirm: Any = input,
+    run: Any = subprocess.run,
+) -> int:
+    print("脚本彩排即将开始。", flush=True)
+    print("接下来会依次执行：YAML 自检、资源创建 dry-run、任务工单创建 dry-run。", flush=True)
+    print("两条 run-* 都会打开后台并填写表单，但不会点击提交，也不会新增或修改后台对象。", flush=True)
+    if not REHEARSAL_CONFIG.is_file():
+        print(f"[FAIL] 彩排 YAML 不存在：{REHEARSAL_CONFIG}", flush=True)
+        print("REHEARSAL: FAILED", flush=True)
+        return 1
+    answer = confirm(f"请输入「{REHEARSAL_CONFIRMATION}」继续：")
+    if answer.strip() != REHEARSAL_CONFIRMATION:
+        print("REHEARSAL: CANCELLED", flush=True)
+        return 1
+
+    for name, command in rehearsal_commands():
+        print(f"\n[REHEARSAL] {name}", flush=True)
+        result = run(command, cwd=REPO, check=False)
+        if result.returncode:
+            print(f"REHEARSAL: FAILED at {name}", flush=True)
+            return 1
+    print("REHEARSAL: OK", flush=True)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="检查项目运行环境")
     parser.add_argument("--login", action="store_true", help="同时打开两个 CSDN 站点并等待登录")
+    parser.add_argument("--rehearsal", action="store_true", help="登录通过后用示例活动彩排资源和工单脚本")
     parser.add_argument("--minutes", type=float, default=15.0, help="每个站点最多等待多少分钟")
     args = parser.parse_args()
 
@@ -432,6 +480,26 @@ def main() -> int:
             "先完成一键部署；端口冲突时不要结束未知进程。",
             failures,
         )
+
+    if args.rehearsal:
+        if failures:
+            report(
+                False,
+                "脚本彩排",
+                "环境诊断未通过，未开始彩排",
+                "先修复上面的失败项，再重新运行 doctor.py --rehearsal。",
+                failures,
+            )
+        elif run_rehearsal():
+            report(
+                False,
+                "脚本彩排",
+                "未完成或执行失败",
+                "确认输入「开始彩排」，再按失败步骤排查。",
+                failures,
+            )
+        else:
+            report(True, "脚本彩排", "资源和任务工单 dry-run 通过")
 
     print()
     if failures:
