@@ -605,8 +605,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
 
     def _static(self, name):
-        p = STATIC / name
-        if not p.exists():
+        if name == "index.html":
+            p = STATIC / "index.html"
+        elif name == "app.css":
+            p = STATIC / "app.css"
+        elif name == "app.js":
+            p = STATIC / "app.js"
+        else:
+            p = None
+        if p is None or not p.is_file():
             self._send(404, "404：没有这个页面资源 %s" % name, "text/plain; charset=utf-8")
             return
         self._send(200, p.read_bytes(), CTYPE.get(p.suffix, "application/octet-stream"))
@@ -621,8 +628,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             self._static("index.html")
             return
-        if u.path in ("/app.css", "/app.js"):
-            self._static(u.path.lstrip("/"))
+        if u.path == "/app.css":
+            self._static("app.css")
+            return
+        if u.path == "/app.js":
+            self._static("app.js")
             return
         if u.path == "/api/activities":
             self._json(200, activities_payload())

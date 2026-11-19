@@ -20,10 +20,56 @@ import sys
 import gzip
 import urllib.request
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 TMP_DIR = Path(__file__).resolve().parents[2] / "automation" / "_tmp"
+HIDDEN_TAGS = {"script", "style", "template", "noscript"}
+BLOCK_TAGS = {
+    "br", "p", "div", "li", "tr",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+}
+
+
+class _TextExtractor(HTMLParser):
+    """按 HTML 结构提取正文，跳过脚本、样式和不可见模板内容。"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.hidden = 0
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag in HIDDEN_TAGS:
+            self.hidden += 1
+        elif not self.hidden and tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_startendtag(self, tag, attrs):
+        if not self.hidden and tag.lower() in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in HIDDEN_TAGS:
+            self.hidden = max(0, self.hidden - 1)
+        elif not self.hidden and tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def html_to_text(html):
+    parser = _TextExtractor()
+    parser.feed(html)
+    parser.close()
+    body = "".join(parser.parts).replace("\xa0", " ")
+    lines = [re.sub(r"[ \t\r\f\v]+", " ", ln).strip() for ln in body.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
 
 
 def use_utf8_stdout():
@@ -44,14 +90,7 @@ def fetch_text(url, out_path=None):
     html = raw.decode("utf-8", "ignore")
     if out_path:
         Path(out_path).write_text(html, encoding="utf-8")
-    body = re.sub(r"<script.*?</script>|<style.*?</style>|<!--.*?-->", " ", html, flags=re.S | re.I)
-    body = re.sub(r"<(br|/p|/div|/h[1-6]|/li|/tr)[^>]*>", "\n", body, flags=re.I)
-    body = re.sub(r"<[^>]+>", " ", body)
-    for a, b in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">")):
-        body = body.replace(a, b)
-    body = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), body)
-    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in body.splitlines()]
-    return "\n".join(ln for ln in lines if ln), html
+    return html_to_text(html), html
 
 
 def main():

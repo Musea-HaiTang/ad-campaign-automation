@@ -77,6 +77,13 @@ class MaterialTemplateTest(unittest.TestCase):
         self.assertIn("人群4", html)
         self.assertIn("标题C", html)
 
+    def test_模板只保留复制功能不再包含修改弹窗(self):
+        html = TPL.read_text(encoding="utf-8")
+        self.assertNotIn("fix-btn", html)
+        self.assertNotIn("fixOverlay", html)
+        self.assertNotIn("buildReq", html)
+        self.assertIn("data-taskname", html)
+
 
 if __name__ == "__main__":
     unittest.main()
